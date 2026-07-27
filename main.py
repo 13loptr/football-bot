@@ -247,16 +247,16 @@ class GeminiProcessor:
    - 本文中に別のメディアやジャーナリスト（例: 「MARCA紙によると」「ファブリツィオ・ロマーノ氏によれば」「Sky Sports報道」など）が引用・言及されている場合、その大元の情報源・記者名を抽出してください（例: 'MARCA紙', 'ファブリツィオ・ロマーノ氏'）。
    - 特に他メディアや特定の記者の引用がない場合は '独自記事' と設定してください。
 6. ジャンル判定 (genre):
-   - ニュースの内容に応じて、以下のいずれか一つを選択してください。
-     - 'japanese': 日本人選手（三笘薫、久保建英、遠藤航など）が所属クラブ等で主役または直接言及されている話題。※クラブ話題最優先
+   - ニュースの内容に応じて、以下の優先順位に従って必ずいずれか一つを厳密に選択してください。
+     - 'transfers': 選手や監督の移籍、移籍の噂・報道、オファー、契約更新・延長、加入・退団、ローン・バイアウト、ターゲット獲得交渉に関連する話題（※移籍・契約に関連するニュースは最優先で選択してください）。
+     - 'japanese': 日本人選手（三笘薫、久保建英、遠藤航など）が所属クラブ等で主役または直接言及されている話題（移籍話題を除く）。
      - 'national': 日本代表（サムライブルー）をはじめ、欧州・南米各国のA代表、W杯予選、代表招集メンバー、代表戦試合結果、国際親善試合などナショナルチーム・代表戦に関連する話題。
-     - 'transfers': 選手や監督の移籍、移籍の噂、オファー、契約更新、退団・就任に関する話題。
-     - 'laliga': ラ・リーガ（レアル・マドリード、バルセロナ、アトレティコ・マドリードなどスペインのクラブ・リーグ）に関連する話題（代表専用話題を除く）。
-     - 'premier': プレミアリーグ（マンチェスター・シティ、アーセナル、リヴァプール、マンチェスター・U、チェルシー、トッテナムなどイングランドのクラブ・リーグ）に関連する話題（代表専用話題を除く）。
-     - 'bundesliga': ブンデスリーガ（バイエルン・ミュンヘン、ドルトムント、レバークーゼン、シュトゥットガルトなどドイツのクラブ・リーグ）に関連する話題（代表専用話題を除く）。
-     - 'serie_a': セリエA（インテル、ACミラン、ユヴェントス、ナポリ、ローマ、ラツィオなどイタリアのクラブ・リーグ）に関連する話題（代表専用話題を除く）。
-     - 'ligue_1': リーグ・アン（パリ・サンジェルマン/PSG、モナコ、マルセイユ、リヨンなどフランスのクラブ・リーグ）に関連する話題（代表専用話題を除く）。
-     - 'general': その他全般（UEFAチャンピオンズリーグ、ヨーロッパリーグ、総合ニュースなど上記に当てはまらないもの）。
+     - 'laliga': ラ・リーガ（レアル・マドリード、バルセロナ、アトレティコ等）のクラブ・試合・リーグ話題。
+     - 'premier': プレミアリーグ（マンC、アーセナル、リヴァプール、マンU、チェルシー等）のクラブ・試合・リーグ話題。
+     - 'bundesliga': ブンデスリーガ（バイエルン、ドルトムント、レバークーゼン等）のクラブ・試合・リーグ話題。
+     - 'serie_a': セリエA（インテル、ACミラン、ユヴェントス、ナポリ等）のクラブ・試合・リーグ話題。
+     - 'ligue_1': リーグ・アン（PSG、モナコ、マルセイユ等）のクラブ・試合・リーグ話題。
+     - 'general': 上記のどの専用ジャンル（移籍、日本人、代表、各主要リーグ）にも該当しない純粋な総合ニュース・全般的なコラム等（最後の受け皿）。
 7. スタメン発表判定 (is_lineup & lineup_team):
    - ニュース記事が「試合のスターティングメンバー（スタメン、Starting XI、Alineaciones、XI inicial、先発メンバー）の発表」に関する記事であるかを判定してください (is_lineup: True/False)。
    - スタメン発表記事である場合 (is_lineup: True)、対象となるチーム名（日本語表記、例: 'レアル・マドリード', 'アーセナル', '日本代表'）を lineup_team に設定してください。スタメン記事でない場合は null を設定してください。
@@ -419,11 +419,11 @@ class GeminiProcessor:
         serie_a_keywords = ["serie a", "inter", "milan", "juventus", "napoli", "roma", "lazio", "italy", "セリエ"]
         ligue_1_keywords = ["ligue 1", "psg", "paris saint-germain", "monaco", "marseille", "lyon", "france", "パリ・サンジェルマン"]
 
-        genre = "general"
-        if any(k in text for k in japanese_keywords):
-            genre = "japanese"
-        elif any(k in text for k in transfer_keywords):
+        genre = "general" # 最後の受け皿
+        if any(k in text for k in transfer_keywords):
             genre = "transfers"
+        elif any(k in text for k in japanese_keywords):
+            genre = "japanese"
         elif any(k in text for k in laliga_keywords):
             genre = "laliga"
         elif any(k in text for k in premier_keywords):
@@ -568,23 +568,63 @@ class DiscordNotifier:
             self.webhooks[genre] = os.getenv(config["env_var"], "").strip()
 
     def send(self, article: ArticleItem, analysis: ArticleAnalysis) -> bool:
-        genre_info = self.GENRE_CONFIG.get(analysis.genre, self.GENRE_CONFIG["general"])
-        webhook_url = self.webhooks.get(analysis.genre) or self.webhooks.get("general")
-
-        # スタメン判定時の専用ラベル・色・Webhookの適用
+        # 1. 最優先: スタメン速報 (is_lineup == True)
         is_lineup = getattr(analysis, "is_lineup", False)
         if is_lineup:
             label_prefix = "【🚨 スタメン速報】"
             full_title = f"{label_prefix} {analysis.title_ja}"
             lineup_webhook = os.getenv("WEBHOOK_LINEUP", "").strip()
-            if lineup_webhook:
-                webhook_url = lineup_webhook
+            webhook_url = lineup_webhook if lineup_webhook else self.webhooks.get("general")
             color = 0xE74C3C  # 赤色
             category_label = f"🚨 スタメン速報 ({analysis.lineup_team})" if getattr(analysis, "lineup_team", None) else "🚨 スタメン速報"
             category_icon = "🚨"
+
+        # 2. 移籍情報・噂 (transfers: 確実・最優先ルーティング)
+        elif getattr(analysis, "genre", "") == "transfers":
+            label_prefix = self.NEWS_TYPE_MAP.get(getattr(analysis, "news_type", "news"), "【ニュース】")
+            full_title = f"{label_prefix} {analysis.title_ja}"
+            webhook_url = self.webhooks.get("transfers") or self.webhooks.get("general")
+            genre_info = self.GENRE_CONFIG["transfers"]
+            color = genre_info["color"]
+            category_label = genre_info["label"]
+            category_icon = genre_info["icon"]
+
+        # 3. 日本人選手ニュース (japanese)
+        elif getattr(analysis, "genre", "") == "japanese":
+            label_prefix = self.NEWS_TYPE_MAP.get(getattr(analysis, "news_type", "news"), "【ニュース】")
+            full_title = f"{label_prefix} {analysis.title_ja}"
+            webhook_url = self.webhooks.get("japanese") or self.webhooks.get("general")
+            genre_info = self.GENRE_CONFIG["japanese"]
+            color = genre_info["color"]
+            category_label = genre_info["label"]
+            category_icon = genre_info["icon"]
+
+        # 4. 代表ニュース (national)
+        elif getattr(analysis, "genre", "") == "national":
+            label_prefix = self.NEWS_TYPE_MAP.get(getattr(analysis, "news_type", "news"), "【ニュース】")
+            full_title = f"{label_prefix} {analysis.title_ja}"
+            webhook_url = self.webhooks.get("national") or self.webhooks.get("general")
+            genre_info = self.GENRE_CONFIG["national"]
+            color = genre_info["color"]
+            category_label = genre_info["label"]
+            category_icon = genre_info["icon"]
+
+        # 5. 5大リーグニュース (laliga, premier, bundesliga, serie_a, ligue_1)
+        elif getattr(analysis, "genre", "") in ("laliga", "premier", "bundesliga", "serie_a", "ligue_1"):
+            label_prefix = self.NEWS_TYPE_MAP.get(getattr(analysis, "news_type", "news"), "【ニュース】")
+            full_title = f"{label_prefix} {analysis.title_ja}"
+            genre_info = self.GENRE_CONFIG.get(analysis.genre, self.GENRE_CONFIG["general"])
+            webhook_url = self.webhooks.get(analysis.genre) or self.webhooks.get("general")
+            color = genre_info["color"]
+            category_label = genre_info["label"]
+            category_icon = genre_info["icon"]
+
+        # 6. 最後の受け皿: 総合・その他ニュース (general)
         else:
             label_prefix = self.NEWS_TYPE_MAP.get(getattr(analysis, "news_type", "news"), "【ニュース】")
             full_title = f"{label_prefix} {analysis.title_ja}"
+            genre_info = self.GENRE_CONFIG["general"]
+            webhook_url = self.webhooks.get("general")
             color = genre_info["color"]
             category_label = genre_info["label"]
             category_icon = genre_info["icon"]
