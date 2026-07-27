@@ -222,6 +222,8 @@ class GeminiProcessor:
             return self._fallback_process(article)
 
         prompt = f"""
+【絶対命令】出力する title_ja と summary_ja は、原文が何語であっても絶対に100%日本語に翻訳・要約してください。英語や外国語のまま出力することは厳禁です。
+
 あなたは海外サッカーに詳しいプロのスポーツジャーナリスト兼翻訳家です。
 以下のニュースの「タイトル」と「本文/概要」を分析してください。
 
@@ -262,7 +264,7 @@ class GeminiProcessor:
    - ニュース記事が「試合のスターティングメンバー（スタメン、Starting XI、Alineaciones、XI inicial、先発メンバー）の発表」に関する記事であるかを判定してください (is_lineup: True/False)。
    - スタメン発表記事である場合 (is_lineup: True)、対象となるチーム名（日本語表記、例: 'レアル・マドリード', 'アーセナル', '日本代表'）を lineup_team に設定してください。スタメン記事でない場合は null を設定してください。
 
-必ず指定されたスキーマに従ってJSONを出力してください。
+【最重要警告】繰り返しになりますが、title_ja と summary_ja は絶対に日本語で出力してください。英語のままでの出力はシステムエラーとみなします。必ず指定されたスキーマに従ってJSONを出力してください。
 """
 
         candidate_models = [self.model_name, "gemini-flash-latest", "gemini-2.0-flash"]
@@ -612,7 +614,7 @@ class DiscordNotifier:
             category_icon = "🚨"
 
         # 2. 移籍情報・噂 (transfers: 確実・最優先ルーティング)
-        elif getattr(analysis, "genre", "") == "transfers":
+        if getattr(analysis, "genre", "") == "transfers":
             label_prefix = self.NEWS_TYPE_MAP.get(getattr(analysis, "news_type", "news"), "【ニュース】")
             full_title = f"{label_prefix} {analysis.title_ja}"
             webhook_url = self.webhooks.get("transfers") or self.webhooks.get("general")
