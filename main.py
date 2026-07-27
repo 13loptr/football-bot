@@ -207,7 +207,7 @@ class GeminiProcessor:
         self.client = None
         
         # 有効なキーが設定されている場合のみ Client を初期化（空文字列やダミーを回避）
-        self.model_name = os.getenv("GEMINI_MODEL", "gemini-flash-latest").strip()
+        self.model_name = os.getenv("GEMINI_MODEL", "gemini-2.0-flash").strip()
         if self.api_key and not self.api_key.startswith("your_") and HAS_GEMINI_SDK:
             try:
                 self.client = genai.Client(api_key=self.api_key)
@@ -267,7 +267,7 @@ class GeminiProcessor:
 【最重要警告】繰り返しになりますが、title_ja と summary_ja は絶対に日本語で出力してください。英語のままでの出力はシステムエラーとみなします。必ず指定されたスキーマに従ってJSONを出力してください。
 """
 
-        candidate_models = [self.model_name, "gemini-flash-latest", "gemini-2.0-flash"]
+        candidate_models = [self.model_name, "gemini-2.0-flash"]
         # 重複除去
         seen = set()
         models_to_try = [m for m in candidate_models if not (m in seen or seen.add(m))]
@@ -360,7 +360,7 @@ class GeminiProcessor:
 必ず指定されたスキーマに従ってJSONを出力してください。
 """
 
-        candidate_models = [self.model_name, "gemini-flash-latest", "gemini-2.0-flash"]
+        candidate_models = [self.model_name, "gemini-2.0-flash"]
         seen = set()
         models_to_try = [m for m in candidate_models if not (m in seen or seen.add(m))]
 
