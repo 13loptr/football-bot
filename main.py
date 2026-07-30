@@ -160,7 +160,7 @@ class GroqProcessor:
         key = api_key or os.getenv("GROQ_API_KEY", "")
         self.api_key = key.strip() if isinstance(key, str) else ""
         self.api_url = "https://api.groq.com/openai/v1/chat/completions"
-        self.model_name = "llama-3.1-70b-versatile" # 翻訳・分類に優れた大型・高速モデル
+        self.model_name = "llama-3.3-70b-specdec" # 翻訳・分類に優れた大型・高速モデル
         
         if not self.api_key:
             print("ℹ️ [GroqProcessor] 有効な GROQ_API_KEY が未設定のため、キーワードベースの簡易処理モードで動きます。")
