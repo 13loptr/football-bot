@@ -206,8 +206,10 @@ class GeminiProcessor:
         self.api_key = key.strip() if isinstance(key, str) else ""
         self.client = None
         
-        # 有効なキーが設定されている場合のみ Client を初期化（空文字列やダミーを回避）
-        self.model_name = os.getenv("GEMINI_MODEL", "gemini-2.0-flash").strip()
+        # 有効なモデル名の安全取得（空文字やスペースを厳格に防御）
+        env_model = os.getenv("GEMINI_MODEL", "").strip()
+        self.model_name = env_model if env_model else "gemini-2.0-flash"
+
         if self.api_key and not self.api_key.startswith("your_") and HAS_GEMINI_SDK:
             try:
                 self.client = genai.Client(api_key=self.api_key)
@@ -264,13 +266,22 @@ class GeminiProcessor:
    - ニュース記事が「試合のスターティングメンバー（スタメン、Starting XI、Alineaciones、XI inicial、先発メンバー）の発表」に関する記事であるかを判定してください (is_lineup: True/False)。
    - スタメン発表記事である場合 (is_lineup: True)、対象となるチーム名（日本語表記、例: 'レアル・マドリード', 'アーセナル', '日本代表'）を lineup_team に設定してください。スタメン記事でない場合は null を設定してください。
 
-【最重要警告】繰り返しになりますが、title_ja と summary_ja は絶対に日本語で出力してください。英語のままでの出力はシステムエラーとみなします。必ず指定されたスキーマに従ってJSONを出力してください。
+【最重要警告】繰り返しになりますが、title_ja と summary_ja は絶対に日本語で出力してください。英語のままの出力はシステムエラーとみなします。必ず指定されたスキーマに従ってJSONを出力してください。
 """
 
+        # 空文字を除外してモデルリストを構築（安全ガード）
         candidate_models = [self.model_name, "gemini-2.0-flash"]
-        # 重複除去
         seen = set()
-        models_to_try = [m for m in candidate_models if not (m in seen or seen.add(m))]
+        models_to_try = []
+        for m in candidate_models:
+            if m and isinstance(m, str) and m.strip():
+                clean_m = m.strip()
+                if clean_m not in seen:
+                    seen.add(clean_m)
+                    models_to_try.append(clean_m)
+
+        if not models_to_try:
+            models_to_try = ["gemini-2.0-flash"]
 
         for model_target in models_to_try:
             for attempt in range(1, max_retries + 1):
@@ -288,10 +299,11 @@ class GeminiProcessor:
                     # レスポンスのパース
                     if response and response.text:
                         text_content = response.text.strip()
-                        # マークダウンコードブロック(```json ... ```)の除去
-                        if text_content.startswith("```"):
-                            text_content = re.sub(r"^```(?:json)?\s*", "", text_content)
-                            text_content = re.sub(r"\s*```$", "", text_content)
+                        # マークダウンコードブロックの除去
+                        bt3 = "`" * 3
+                        if text_content.startswith(bt3):
+                            text_content = re.sub(r"^" + bt3 + r"(?:json)?\s*", "", text_content)
+                            text_content = re.sub(r"\s*" + bt3 + r"$", "", text_content)
                         
                         data = json.loads(text_content)
                         analysis = ArticleAnalysis(**data)
@@ -360,9 +372,19 @@ class GeminiProcessor:
 必ず指定されたスキーマに従ってJSONを出力してください。
 """
 
+        # 空文字を除外してモデルリストを構築（安全ガード）
         candidate_models = [self.model_name, "gemini-2.0-flash"]
         seen = set()
-        models_to_try = [m for m in candidate_models if not (m in seen or seen.add(m))]
+        models_to_try = []
+        for m in candidate_models:
+            if m and isinstance(m, str) and m.strip():
+                clean_m = m.strip()
+                if clean_m not in seen:
+                    seen.add(clean_m)
+                    models_to_try.append(clean_m)
+
+        if not models_to_try:
+            models_to_try = ["gemini-2.0-flash"]
 
         for model_target in models_to_try:
             for attempt in range(1, max_retries + 1):
@@ -379,9 +401,10 @@ class GeminiProcessor:
 
                     if response and response.text:
                         text_content = response.text.strip()
-                        if text_content.startswith("```"):
-                            text_content = re.sub(r"^```(?:json)?\s*", "", text_content)
-                            text_content = re.sub(r"\s*```$", "", text_content)
+                        bt3 = "`" * 3
+                        if text_content.startswith(bt3):
+                            text_content = re.sub(r"^" + bt3 + r"(?:json)?\s*", "", text_content)
+                            text_content = re.sub(r"\s*" + bt3 + r"$", "", text_content)
                         
                         data = json.loads(text_content)
                         return WeeklySchedule(**data)
@@ -584,9 +607,10 @@ class DiscordNotifier:
             error_details = "".join(tb_lines)[-1400:]  # Discord文字数制限対策
 
         jst_time = datetime.now(timezone(timedelta(hours=9))).strftime("%Y-%m-%d %H:%M:%S")
+        bt3 = "`" * 3
         content = f"🚨 **【KICK システムエラー発生アラート】**\n⏰ **発生時刻 (JST):** `{jst_time}`\n📝 **概要:** {message}"
         if error_details:
-            content += f"\n\n🔍 **スタックトレース:**\n```python\n{error_details}\n```"
+            content += f"\n\n🔍 **スタックトレース:**\n{bt3}python\n{error_details}\n{bt3}"
 
         payload = {"content": content[:1950]}
         try:
@@ -614,7 +638,7 @@ class DiscordNotifier:
             category_icon = "🚨"
 
         # 2. 移籍情報・噂 (transfers: 確実・最優先ルーティング)
-        if getattr(analysis, "genre", "") == "transfers":
+        elif getattr(analysis, "genre", "") == "transfers":
             label_prefix = self.NEWS_TYPE_MAP.get(getattr(analysis, "news_type", "news"), "【ニュース】")
             full_title = f"{label_prefix} {analysis.title_ja}"
             webhook_url = self.webhooks.get("transfers") or self.webhooks.get("general")
@@ -712,7 +736,7 @@ class DiscordNotifier:
         try:
             res = requests.post(webhook_url, json=payload, timeout=10)
             if res.status_code in (200, 204):
-                print(f"✅ [DiscordNotifier] Discordへの送信成功 ({genre_info['label']})")
+                print(f"✅ [DiscordNotifier] Discordへの送信成功 ({category_label})")
                 return True
             elif res.status_code == 429:
                 # レートリミット対応
@@ -737,30 +761,23 @@ class RSSFetcher:
         """HTMLタグおよび文字参照(HTML entity)の除去と整形"""
         if not text:
             return ""
-        # 1. HTML実体参照（&amp;, &nbsp;, &#39; 等）をデコード
         text = html.unescape(str(text))
-        # 2. HTMLタグ除去
         clean_text = re.sub(r'<[^>]+>', '', text)
-        # 3. 再度デコード（エスケープされたタグ文字等に対応）
         clean_text = html.unescape(clean_text)
-        # 4. 連続する空白・改行の整形
         clean_text = re.sub(r'\s+', ' ', clean_text).strip()
         return clean_text
 
     @staticmethod
     def _extract_summary_raw(entry) -> str:
-        """フィードエントリーの様々なデータ構造（summary, description, content等）から本文/概要テキストを抽出"""
-        # 1. summary
+        """フィードエントリーの様々なデータ構造から本文/概要テキストを抽出"""
         summary = entry.get("summary", "") if isinstance(entry, dict) else getattr(entry, "summary", "")
         if summary:
             return str(summary)
 
-        # 2. description
         desc = entry.get("description", "") if isinstance(entry, dict) else getattr(entry, "description", "")
         if desc:
             return str(desc)
 
-        # 3. content (Atom/RSS 2.0 encoded content)
         contents = entry.get("content", []) if isinstance(entry, dict) else getattr(entry, "content", [])
         if contents and isinstance(contents, list):
             for c in contents:
@@ -769,7 +786,6 @@ class RSSFetcher:
                 elif hasattr(c, "value") and c.value:
                     return str(c.value)
 
-        # 4. summary_detail
         detail = entry.get("summary_detail", {}) if isinstance(entry, dict) else getattr(entry, "summary_detail", {})
         if detail and isinstance(detail, dict) and detail.get("value"):
             return str(detail["value"])
@@ -781,19 +797,18 @@ class RSSFetcher:
     @staticmethod
     def _extract_image(entry) -> Optional[str]:
         """フィードエントリーから画像URLを抽出"""
-        # 1. media_content
         media_content = getattr(entry, "media_content", None) or (entry.get("media_content", None) if isinstance(entry, dict) else None)
         if media_content:
             for media in media_content:
                 if isinstance(media, dict) and media.get("url"):
                     return media["url"]
-        # 2. media_thumbnail
+
         media_thumb = getattr(entry, "media_thumbnail", None) or (entry.get("media_thumbnail", None) if isinstance(entry, dict) else None)
         if media_thumb:
             for media in media_thumb:
                 if isinstance(media, dict) and media.get("url"):
                     return media["url"]
-        # 3. enclosures
+
         enclosures = getattr(entry, "enclosures", None) or (entry.get("enclosures", None) if isinstance(entry, dict) else None)
         if enclosures:
             for enc in enclosures:
@@ -801,7 +816,7 @@ class RSSFetcher:
                 enc_href = getattr(enc, "href", "") or (enc.get("href", "") if isinstance(enc, dict) else "")
                 if "image" in enc_type and enc_href:
                     return enc_href
-        # 4. raw summary / content 内の <img> タグ
+
         raw_text = RSSFetcher._extract_summary_raw(entry)
         img_match = re.search(r'<img[^>]+src=["\']([^"\']+)["\']', raw_text, re.IGNORECASE)
         if img_match:
@@ -812,13 +827,12 @@ class RSSFetcher:
     def fetch_feed(self, source_name: str, feed_url: str, max_articles: int = 5) -> List[ArticleItem]:
         articles = []
         try:
-            # ブロックされやすい非推奨URLの自動正規化
             if "kicker.de/bundesliga.rss" in feed_url:
-                feed_url = "https://newsfeed.kicker.de/news/bundesliga"
+                feed_url = "[https://newsfeed.kicker.de/news/bundesliga](https://newsfeed.kicker.de/news/bundesliga)"
             elif "gazzetta.it/rss/Calcio.xml" in feed_url:
-                feed_url = "https://www.gazzetta.it/rss/calcio.xml"
+                feed_url = "[https://www.gazzetta.it/rss/calcio.xml](https://www.gazzetta.it/rss/calcio.xml)"
             elif "xml.lequipe.fr" in feed_url:
-                feed_url = "https://www.footmercato.net/flux-rss"
+                feed_url = "[https://www.footmercato.net/flux-rss](https://www.footmercato.net/flux-rss)"
 
             headers = {
                 "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36",
@@ -831,8 +845,7 @@ class RSSFetcher:
                 res = requests.get(feed_url, headers=headers, timeout=12, allow_redirects=True)
                 res.raise_for_status()
                 parsed = feedparser.parse(res.content)
-            except Exception as req_err:
-                # requestsでHTTPエラーや失敗が生じた場合、feedparser直接取得を試行
+            except Exception:
                 parsed = feedparser.parse(feed_url, agent=headers["User-Agent"])
 
             if not parsed or not parsed.entries:
@@ -847,7 +860,6 @@ class RSSFetcher:
                 raw_summary = self._extract_summary_raw(entry)
                 summary = self._clean_html(raw_summary)
 
-                # 本文/概要が空の場合はタイトルをフォールバックとして使用
                 if not summary:
                     summary = title
 
@@ -889,12 +901,11 @@ class SoccerNewsBot:
             except Exception as e:
                 print(f"⚠️ [SoccerNewsBot] 設定ファイル {FEEDS_CONFIG_FILE} の読み込み失敗 ({e})")
         
-        # デフォルトフィード設定
         return [
-            {"name": "BBC Football", "url": "https://feeds.bbci.co.uk/sport/football/rss.xml"},
-            {"name": "Sky Sports Football", "url": "https://www.skysports.com/rss/12040"},
-            {"name": "MARCA (La Liga)", "url": "https://e00-marca.uecdn.es/rss/futbol/primera-division.xml"},
-            {"name": "The Guardian (Premier)", "url": "https://www.theguardian.com/football/premierleague/rss"}
+            {"name": "BBC Football", "url": "[https://feeds.bbci.co.uk/sport/football/rss.xml](https://feeds.bbci.co.uk/sport/football/rss.xml)"},
+            {"name": "Sky Sports Football", "url": "[https://www.skysports.com/rss/12040](https://www.skysports.com/rss/12040)"},
+            {"name": "MARCA (La Liga)", "url": "[https://e00-marca.uecdn.es/rss/futbol/primera-division.xml](https://e00-marca.uecdn.es/rss/futbol/primera-division.xml)"},
+            {"name": "The Guardian (Premier)", "url": "[https://www.theguardian.com/football/premierleague/rss](https://www.theguardian.com/football/premierleague/rss)"}
         ]
 
     def run_once(self):
@@ -918,33 +929,27 @@ class SoccerNewsBot:
 
                 for article in articles:
                     try:
-                        # 重複判定 (URLベース)
                         if self.sent_history.is_sent(article.link):
                             continue
 
-                        # Gemini API負荷軽減のための意図的ウェイト (呼び出し前に必ず3秒待機)
                         request_delay = float(os.getenv("GEMINI_REQUEST_DELAY_SECONDS", "3.0"))
                         print(f"⏳ [Pacing] Gemini API負荷制御のため {request_delay:.1f} 秒待機中...")
                         time.sleep(request_delay)
 
-                        # Geminiによる翻訳とジャンル自動判定
                         analysis = self.gemini.process(article)
 
-                        # 翻訳未完了（Gemini APIエラーや返却値が非日本語）の確実な検知とスキップ処理
                         if not analysis or not analysis.title_ja or not is_japanese_text(analysis.title_ja):
                             print(f"⚠️ [SoccerNewsBot] 翻訳未完了（日本語タイトルなし）のため英文のまま配信するのを回避してスキップしました: {article.original_title}")
                             if not self.dry_run:
                                 self.sent_history.add(article.link)
                             continue
 
-                        # サッカー以外のスポーツ・ニュースの除外処理
                         if not analysis.is_football:
                             print(f"🚫 [Non-Football Skipped] サッカー以外のニュースのため送信をスキップしました: {article.original_title}")
                             if not self.dry_run:
                                 self.sent_history.add(article.link)
                             continue
 
-                        # スタメン速報の当日重複排除チェック
                         if getattr(analysis, "is_lineup", False) and getattr(analysis, "lineup_team", None):
                             if self.lineup_history.is_lineup_sent(analysis.lineup_team):
                                 print(f"🚫 [Lineup Duplicate Skipped] 本日すでに '{analysis.lineup_team}' のスタメン速報を配信済みのためスキップしました: {article.original_title}")
@@ -954,7 +959,6 @@ class SoccerNewsBot:
 
                         total_new += 1
 
-                        # Discord送信
                         success = self.notifier.send(article, analysis)
 
                         if success:
@@ -964,7 +968,6 @@ class SoccerNewsBot:
                                 if getattr(analysis, "is_lineup", False) and getattr(analysis, "lineup_team", None):
                                     self.lineup_history.add(analysis.lineup_team)
 
-                        # Webhook送信インターバル (API負荷軽減)
                         time.sleep(1)
                     except Exception as article_err:
                         print(f"⚠️ [SoccerNewsBot] 記事個別の処理中にエラー発生 ({article.original_title}): {article_err}")
@@ -980,7 +983,6 @@ class SoccerNewsBot:
         """直近1週間のサッカー試合スケジュールを作成してDiscordに配信する"""
         print(f"\n🗓️ [{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] 直近1週間のサッカー試合スケジュールを作成・配信します...")
         try:
-            # 3秒待機（Gemini APIペーシング）
             request_delay = float(os.getenv("GEMINI_REQUEST_DELAY_SECONDS", "3.0"))
             print(f"⏳ [Pacing] Gemini API負荷制御のため {request_delay:.1f} 秒待機中...")
             time.sleep(request_delay)
@@ -1038,7 +1040,6 @@ def main():
 
         args = parser.parse_args()
 
-        # 環境変数からのデフォルトインターバル取得
         interval = args.interval or int(os.getenv("FETCH_INTERVAL_MINUTES", "15"))
 
         bot = SoccerNewsBot(dry_run=args.dry_run, max_per_feed=args.limit)
@@ -1048,7 +1049,6 @@ def main():
         elif args.loop:
             bot.run_loop(interval_minutes=interval)
         else:
-            # デフォルトはonce実行
             bot.run_once()
     except Exception as main_err:
         print(f"💥 [main] メインプログラムで致命的例外が発生しました: {main_err}")
