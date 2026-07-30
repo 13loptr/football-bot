@@ -110,11 +110,11 @@ class LineupHistory:
                     data = json.load(f)
                     if isinstance(data, list):
                         self.records = set(data)
+                        return
             except Exception as e:
-                print(f"⚠️ [LineupHistory] スタメン送信履歴の読み込みに失敗しました ({e})。新規作成します。")
-                self.records = set()
-        else:
-            self.records = set()
+                print(f"⚠️ [LineupHistory] スタメン送信履歴の読み込みに失敗しました ({e})。新規作成して自動修復します。")
+        self.records = set()
+        self.save()
 
     def is_lineup_sent(self, team_name: str) -> bool:
         if not team_name:
@@ -172,11 +172,11 @@ class SentHistory:
                     data = json.load(f)
                     if isinstance(data, list):
                         self.sent_urls = set(data)
+                        return
             except Exception as e:
-                print(f"⚠️ [SentHistory] 送信履歴ファイルの読み込みに失敗しました ({e})。新規作成します。")
-                self.sent_urls = set()
-        else:
-            self.sent_urls = set()
+                print(f"⚠️ [SentHistory] 送信履歴ファイルの読み込みに失敗しました ({e})。ファイル構造を初期化して自動修復します。")
+        self.sent_urls = set()
+        self.save()
 
     def is_sent(self, url: str) -> bool:
         return url in self.sent_urls
@@ -187,7 +187,6 @@ class SentHistory:
 
     def save(self):
         try:
-            # 最新のmax_records件に絞って保存
             urls_list = list(self.sent_urls)
             if len(urls_list) > self.max_records:
                 urls_list = urls_list[-self.max_records:]
@@ -206,7 +205,6 @@ class GeminiProcessor:
         self.api_key = key.strip() if isinstance(key, str) else ""
         self.client = None
         
-        # 有効なモデル名の安全取得（空文字やスペースを厳格に防御）
         env_model = os.getenv("GEMINI_MODEL", "").strip()
         self.model_name = env_model if env_model else "gemini-2.0-flash"
 
@@ -269,8 +267,7 @@ class GeminiProcessor:
 【最重要警告】繰り返しになりますが、title_ja と summary_ja は絶対に日本語で出力してください。英語のままの出力はシステムエラーとみなします。必ず指定されたスキーマに従ってJSONを出力してください。
 """
 
-        # 空文字を除外してモデルリストを構築（安全ガード）
-        candidate_models = [self.model_name, "gemini-2.0-flash"]
+        candidate_models = [self.model_name, "gemini-2.0-flash", "gemini-2.5-flash", "gemini-1.5-flash"]
         seen = set()
         models_to_try = []
         for m in candidate_models:
@@ -281,7 +278,7 @@ class GeminiProcessor:
                     models_to_try.append(clean_m)
 
         if not models_to_try:
-            models_to_try = ["gemini-2.0-flash"]
+            models_to_try = ["gemini-2.0-flash", "gemini-2.5-flash", "gemini-1.5-flash"]
 
         for model_target in models_to_try:
             for attempt in range(1, max_retries + 1):
@@ -296,10 +293,8 @@ class GeminiProcessor:
                         ),
                     )
 
-                    # レスポンスのパース
                     if response and response.text:
                         text_content = response.text.strip()
-                        # マークダウンコードブロックの除去
                         bt3 = "`" * 3
                         if text_content.startswith(bt3):
                             text_content = re.sub(r"^" + bt3 + r"(?:json)?\s*", "", text_content)
@@ -308,7 +303,6 @@ class GeminiProcessor:
                         data = json.loads(text_content)
                         analysis = ArticleAnalysis(**data)
 
-                        # 日本語判定バリデーション: 原文タイトルに英字があり、返却タイトルに日本語が含まれていない場合は翻訳再試行
                         if not is_japanese_text(analysis.title_ja):
                             print(f"⚠️ [GeminiProcessor] 翻訳未完了を検出（日本語文字なし: '{analysis.title_ja}'）。再試行します (試行 {attempt}/{max_retries})...")
                             if attempt < max_retries:
@@ -320,15 +314,14 @@ class GeminiProcessor:
                     err_str = str(e)
                     print(f"⚠️ [GeminiProcessor] API呼び出しエラー (モデル: {model_target}, 試行 {attempt}/{max_retries}): {err_str}")
                     
-                    # 404 NOT_FOUND の場合はモデル切り替え
-                    if "404" in err_str or "NOT_FOUND" in err_str:
-                        print(f"⚠️ [GeminiProcessor] モデル '{model_target}' が利用不能のため、次のモデル候補に切り替えます。")
+                    # 404, NOT_FOUND, 1日上限(RPD/Quota)の検出時は無駄に待たず即座に次のモデル候補へ切替
+                    if "404" in err_str or "NOT_FOUND" in err_str or "Quota exceeded" in err_str or "limit: 0" in err_str or "GenerateRequestsPerDay" in err_str:
+                        print(f"⚠️ [GeminiProcessor] モデル '{model_target}' が利用不能または本日上限(RPD)に達したため、即座に次のモデル候補へ切り替えます。")
                         break
 
                     if attempt < max_retries:
                         wait_sec = retry_delay * (2 ** (attempt - 1))
-                        if "429" in err_str or "RESOURCE_EXHAUSTED" in err_str or "Quota" in err_str:
-                            # エラーレスポンスからAPI推奨の待機秒数(retryIn/retryDelay)を動的抽出
+                        if "429" in err_str or "RESOURCE_EXHAUSTED" in err_str:
                             delay_match = re.search(r'retry in ([0-9]+(?:\.[0-9]+)?)s', err_str, re.IGNORECASE)
                             if not delay_match:
                                 delay_match = re.search(r"'retryDelay':\s*['\"]([0-9]+)s['\"]", err_str, re.IGNORECASE)
@@ -350,7 +343,6 @@ class GeminiProcessor:
             print("⚠️ [GeminiProcessor] 有効な Gemini Client が未初期化のためスケジュール作成をスキップします。")
             return None
 
-        # 日本時間の本日日付を取得
         jst_now = datetime.now(timezone(timedelta(hours=9)))
         current_date_str = jst_now.strftime("%Y年%m月%d日(%a)")
 
@@ -372,8 +364,7 @@ class GeminiProcessor:
 必ず指定されたスキーマに従ってJSONを出力してください。
 """
 
-        # 空文字を除外してモデルリストを構築（安全ガード）
-        candidate_models = [self.model_name, "gemini-2.0-flash"]
+        candidate_models = [self.model_name, "gemini-2.0-flash", "gemini-2.5-flash", "gemini-1.5-flash"]
         seen = set()
         models_to_try = []
         for m in candidate_models:
@@ -384,7 +375,7 @@ class GeminiProcessor:
                     models_to_try.append(clean_m)
 
         if not models_to_try:
-            models_to_try = ["gemini-2.0-flash"]
+            models_to_try = ["gemini-2.0-flash", "gemini-2.5-flash", "gemini-1.5-flash"]
 
         for model_target in models_to_try:
             for attempt in range(1, max_retries + 1):
@@ -412,12 +403,13 @@ class GeminiProcessor:
                     err_str = str(e)
                     print(f"⚠️ [GeminiProcessor] スケジュール生成エラー (モデル: {model_target}, 試行 {attempt}/{max_retries}): {err_str}")
                     
-                    if "404" in err_str or "NOT_FOUND" in err_str:
+                    if "404" in err_str or "NOT_FOUND" in err_str or "Quota exceeded" in err_str or "limit: 0" in err_str or "GenerateRequestsPerDay" in err_str:
+                        print(f"⚠️ [GeminiProcessor] モデル '{model_target}' が利用不能または本日上限(RPD)に達したため、即座に次のモデル候補へ切り替えます。")
                         break
 
                     if attempt < max_retries:
                         wait_sec = retry_delay * (2 ** (attempt - 1))
-                        if "429" in err_str or "RESOURCE_EXHAUSTED" in err_str or "Quota" in err_str:
+                        if "429" in err_str or "RESOURCE_EXHAUSTED" in err_str:
                             delay_match = re.search(r'retry in ([0-9]+(?:\.[0-9]+)?)s', err_str, re.IGNORECASE)
                             if not delay_match:
                                 delay_match = re.search(r"'retryDelay':\s*['\"]([0-9]+)s['\"]", err_str, re.IGNORECASE)
@@ -432,11 +424,9 @@ class GeminiProcessor:
         """APIキーが未設定またはエラー時のフォールバック処理（簡易キーワード判定）"""
         text = (article.original_title + " " + article.summary).lower()
 
-        # サッカー以外のスポーツ判定
         non_football_keywords = ["tennis", "f1", "formula 1", "golf", "nba", "basketball", "baseball", "cricket", "rugby", "motogp", "wimbledon", "us open", "テニス", "ゴルフ"]
         is_football = not any(k in text for k in non_football_keywords)
 
-        # 簡易ジャンル判定
         japanese_keywords = ["mitoma", "kubo", "endo", "tomiyasu", "furuhashi", "minamino", "doan", "sugawara", "kamada", "ito", "japan", "samurai blue", "ゲキサカ", "フットボールチャンネル"]
         transfer_keywords = ["transfer", "sign", "deal", "contract", "target", "bid", "loan", "move", "joined", "fee", "agreed", "rumour", "rumor", "移籍", "獲得", "加入", "退団", "契約"]
         laliga_keywords = ["real madrid", "barcelona", "barca", "atletico", "la liga", "spain", "real sociedad", "girona", "sevilla", "betis", "バルセロナ", "レアル"]
@@ -445,7 +435,7 @@ class GeminiProcessor:
         serie_a_keywords = ["serie a", "inter", "milan", "juventus", "napoli", "roma", "lazio", "italy", "セリエ"]
         ligue_1_keywords = ["ligue 1", "psg", "paris saint-germain", "monaco", "marseille", "lyon", "france", "パリ・サンジェルマン"]
 
-        genre = "general" # 最後の受け皿
+        genre = "general"
         if any(k in text for k in transfer_keywords):
             genre = "transfers"
         elif any(k in text for k in japanese_keywords):
@@ -461,14 +451,12 @@ class GeminiProcessor:
         elif any(k in text for k in ligue_1_keywords):
             genre = "ligue_1"
 
-        # 性質ラベル判定
         news_type = "news"
         if any(k in text for k in ["official", "confirmed", "announced", "statement", "公式", "発表"]):
             news_type = "official"
         elif any(k in text for k in ["rumor", "rumour", "reportedly", "target", "interest", "噂", "報道"]):
             news_type = "rumor"
 
-        # スタメン簡易判定
         lineup_keywords = ["starting xi", "lineup", "line-up", "alineacion", "alineaciones", "スタメン", "先発"]
         is_lineup = any(k in text for k in lineup_keywords)
 
@@ -490,7 +478,6 @@ def format_schedule_message(schedule: WeeklySchedule) -> str:
     lines.append("📅 **【欧州サッカー＆注目マッチ 直近1週間試合スケジュール】**")
     lines.append(f"🗓️ **対象期間: {schedule.period_str} (JST)**\n")
     
-    # 1. 今週の注目ピックアップカード
     lines.append("【🔥 今週の注目ピックアップカード】")
     if schedule.featured_matches:
         for m in schedule.featured_matches:
@@ -501,7 +488,6 @@ def format_schedule_message(schedule: WeeklySchedule) -> str:
     
     lines.append("\n──────────────────────────────────────────────────\n")
 
-    # 2. 全試合スケジュール一覧
     lines.append("⚽ **【直近7日間の対戦カード一覧 (JST)】**")
     
     current_date = None
@@ -524,7 +510,7 @@ def send_discord_chunks(webhook_url: str, text: str, max_length: int = 1900) -> 
     current_length = 0
 
     for line in text.split("\n"):
-        line_len = len(line) + 1  # 改行コード分+1
+        line_len = len(line) + 1
         if current_length + line_len > max_length:
             if current_chunk:
                 chunks.append("\n".join(current_chunk))
@@ -604,7 +590,7 @@ class DiscordNotifier:
         error_details = ""
         if error:
             tb_lines = traceback.format_exception(type(error), error, error.__traceback__)
-            error_details = "".join(tb_lines)[-1400:]  # Discord文字数制限対策
+            error_details = "".join(tb_lines)[-1400:]
 
         jst_time = datetime.now(timezone(timedelta(hours=9))).strftime("%Y-%m-%d %H:%M:%S")
         bt3 = "`" * 3
@@ -626,18 +612,16 @@ class DiscordNotifier:
             return False
 
     def send(self, article: ArticleItem, analysis: ArticleAnalysis) -> bool:
-        # 1. 最優先: スタメン速報 (is_lineup == True)
         is_lineup = getattr(analysis, "is_lineup", False)
         if is_lineup:
             label_prefix = "【🚨 スタメン速報】"
             full_title = f"{label_prefix} {analysis.title_ja}"
             lineup_webhook = os.getenv("WEBHOOK_LINEUP", "").strip()
             webhook_url = lineup_webhook if lineup_webhook else self.webhooks.get("general")
-            color = 0xE74C3C  # 赤色
+            color = 0xE74C3C
             category_label = f"🚨 スタメン速報 ({analysis.lineup_team})" if getattr(analysis, "lineup_team", None) else "🚨 スタメン速報"
             category_icon = "🚨"
 
-        # 2. 移籍情報・噂 (transfers: 確実・最優先ルーティング)
         elif getattr(analysis, "genre", "") == "transfers":
             label_prefix = self.NEWS_TYPE_MAP.get(getattr(analysis, "news_type", "news"), "【ニュース】")
             full_title = f"{label_prefix} {analysis.title_ja}"
@@ -647,7 +631,6 @@ class DiscordNotifier:
             category_label = genre_info["label"]
             category_icon = genre_info["icon"]
 
-        # 3. 日本人選手ニュース (japanese)
         elif getattr(analysis, "genre", "") == "japanese":
             label_prefix = self.NEWS_TYPE_MAP.get(getattr(analysis, "news_type", "news"), "【ニュース】")
             full_title = f"{label_prefix} {analysis.title_ja}"
@@ -657,7 +640,6 @@ class DiscordNotifier:
             category_label = genre_info["label"]
             category_icon = genre_info["icon"]
 
-        # 4. 代表ニュース (national)
         elif getattr(analysis, "genre", "") == "national":
             label_prefix = self.NEWS_TYPE_MAP.get(getattr(analysis, "news_type", "news"), "【ニュース】")
             full_title = f"{label_prefix} {analysis.title_ja}"
@@ -667,7 +649,6 @@ class DiscordNotifier:
             category_label = genre_info["label"]
             category_icon = genre_info["icon"]
 
-        # 5. 5大リーグニュース (laliga, premier, bundesliga, serie_a, ligue_1)
         elif getattr(analysis, "genre", "") in ("laliga", "premier", "bundesliga", "serie_a", "ligue_1"):
             label_prefix = self.NEWS_TYPE_MAP.get(getattr(analysis, "news_type", "news"), "【ニュース】")
             full_title = f"{label_prefix} {analysis.title_ja}"
@@ -677,7 +658,6 @@ class DiscordNotifier:
             category_label = genre_info["label"]
             category_icon = genre_info["icon"]
 
-        # 6. 最後の受け皿: 総合・その他ニュース (general)
         else:
             label_prefix = self.NEWS_TYPE_MAP.get(getattr(analysis, "news_type", "news"), "【ニュース】")
             full_title = f"{label_prefix} {analysis.title_ja}"
@@ -687,7 +667,6 @@ class DiscordNotifier:
             category_label = genre_info["label"]
             category_icon = genre_info["icon"]
 
-        # 情報源表示テキストの作成
         primary_src = getattr(analysis, "primary_source", "") or "独自記事"
         if primary_src and primary_src != "独自記事" and primary_src != article.source_name:
             source_display = f"{article.source_name} (引用: {primary_src})"
@@ -709,7 +688,6 @@ class DiscordNotifier:
             print(f"⚠️ [DiscordNotifier] Webhook URLが設定されていません。スキップします。")
             return False
 
-        # Embedメッセージの作成
         embed = {
             "title": full_title,
             "url": article.link,
@@ -739,7 +717,6 @@ class DiscordNotifier:
                 print(f"✅ [DiscordNotifier] Discordへの送信成功 ({category_label})")
                 return True
             elif res.status_code == 429:
-                # レートリミット対応
                 retry_after = res.json().get("retry_after", 5)
                 print(f"⏳ [DiscordNotifier] Discord Rate limit検知。{retry_after}秒待機して再送します...")
                 time.sleep(retry_after)
@@ -758,7 +735,6 @@ class RSSFetcher:
 
     @staticmethod
     def _clean_html(text: str) -> str:
-        """HTMLタグおよび文字参照(HTML entity)の除去と整形"""
         if not text:
             return ""
         text = html.unescape(str(text))
@@ -769,7 +745,6 @@ class RSSFetcher:
 
     @staticmethod
     def _extract_summary_raw(entry) -> str:
-        """フィードエントリーの様々なデータ構造から本文/概要テキストを抽出"""
         summary = entry.get("summary", "") if isinstance(entry, dict) else getattr(entry, "summary", "")
         if summary:
             return str(summary)
@@ -796,7 +771,6 @@ class RSSFetcher:
 
     @staticmethod
     def _extract_image(entry) -> Optional[str]:
-        """フィードエントリーから画像URLを抽出"""
         media_content = getattr(entry, "media_content", None) or (entry.get("media_content", None) if isinstance(entry, dict) else None)
         if media_content:
             for media in media_content:
@@ -828,31 +802,40 @@ class RSSFetcher:
         articles = []
         try:
             if "kicker.de/bundesliga.rss" in feed_url:
-                feed_url = "[https://newsfeed.kicker.de/news/bundesliga](https://newsfeed.kicker.de/news/bundesliga)"
+                feed_url = "https://newsfeed.kicker.de/news/bundesliga"
             elif "gazzetta.it/rss/Calcio.xml" in feed_url:
-                feed_url = "[https://www.gazzetta.it/rss/calcio.xml](https://www.gazzetta.it/rss/calcio.xml)"
+                feed_url = "https://www.gazzetta.it/rss/calcio.xml"
             elif "xml.lequipe.fr" in feed_url:
-                feed_url = "[https://www.footmercato.net/flux-rss](https://www.footmercato.net/flux-rss)"
+                feed_url = "https://www.footmercato.net/flux-rss"
 
             headers = {
                 "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36",
-                "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
-                "Accept-Language": "en-US,en;q=0.9,ja;q=0.8,de;q=0.7,it;q=0.7,fr;q=0.7",
-                "Upgrade-Insecure-Requests": "1"
+                "Accept": "application/rss+xml, application/xml, text/xml, text/html, */*;q=0.8",
+                "Accept-Language": "en-US,en;q=0.9",
+                "Cache-Control": "no-cache"
             }
+            
             parsed = None
             try:
-                res = requests.get(feed_url, headers=headers, timeout=12, allow_redirects=True)
-                res.raise_for_status()
-                parsed = feedparser.parse(res.content)
-            except Exception:
+                session = requests.Session()
+                res = session.get(feed_url, headers=headers, timeout=12, allow_redirects=True)
+                if res.status_code == 200 and res.content:
+                    parsed = feedparser.parse(res.content)
+                else:
+                    print(f"⚠️ [RSSFetcher] HTTPステータス: {res.status_code} ({source_name})")
+            except Exception as req_err:
+                print(f"⚠️ [RSSFetcher] requests取得通信例外 ({source_name}): {req_err}")
+
+            if not parsed or not getattr(parsed, "entries", None):
+                # フォールバック: feedparserで直接URL指定取得
                 parsed = feedparser.parse(feed_url, agent=headers["User-Agent"])
 
-            if not parsed or not parsed.entries:
+            entries = getattr(parsed, "entries", [])
+            if not entries:
                 print(f"⚠️ [RSSFetcher] エントリーが0件または取得失敗: {source_name} ({feed_url})")
                 return articles
 
-            for entry in parsed.entries[:max_articles]:
+            for entry in entries[:max_articles]:
                 raw_title = entry.get("title", "") if isinstance(entry, dict) else getattr(entry, "title", "")
                 title = self._clean_html(raw_title)
                 link = entry.get("link", "") if isinstance(entry, dict) else getattr(entry, "link", "")
@@ -894,19 +877,27 @@ class SoccerNewsBot:
         self.feeds = self._load_feeds_config()
 
     def _load_feeds_config(self) -> List[Dict[str, str]]:
+        default_feeds = [
+            {"name": "BBC Football", "url": "https://feeds.bbci.co.uk/sport/football/rss.xml"},
+            {"name": "Sky Sports Football", "url": "https://www.skysports.com/rss/12040"},
+            {"name": "MARCA (La Liga)", "url": "https://e00-marca.uecdn.es/rss/futbol/primera-division.xml"},
+            {"name": "The Guardian (Premier)", "url": "https://www.theguardian.com/football/premierleague/rss"}
+        ]
         if os.path.exists(FEEDS_CONFIG_FILE):
             try:
                 with open(FEEDS_CONFIG_FILE, "r", encoding="utf-8") as f:
-                    return json.load(f)
+                    data = json.load(f)
+                    if isinstance(data, list) and len(data) > 0:
+                        return data
             except Exception as e:
-                print(f"⚠️ [SoccerNewsBot] 設定ファイル {FEEDS_CONFIG_FILE} の読み込み失敗 ({e})")
+                print(f"⚠️ [SoccerNewsBot] 設定ファイル {FEEDS_CONFIG_FILE} の読み込み失敗 ({e})。修復してデフォルト値を使用します。")
+                try:
+                    with open(FEEDS_CONFIG_FILE, "w", encoding="utf-8") as f:
+                        json.dump(default_feeds, f, ensure_ascii=False, indent=2)
+                except Exception:
+                    pass
         
-        return [
-            {"name": "BBC Football", "url": "[https://feeds.bbci.co.uk/sport/football/rss.xml](https://feeds.bbci.co.uk/sport/football/rss.xml)"},
-            {"name": "Sky Sports Football", "url": "[https://www.skysports.com/rss/12040](https://www.skysports.com/rss/12040)"},
-            {"name": "MARCA (La Liga)", "url": "[https://e00-marca.uecdn.es/rss/futbol/primera-division.xml](https://e00-marca.uecdn.es/rss/futbol/primera-division.xml)"},
-            {"name": "The Guardian (Premier)", "url": "[https://www.theguardian.com/football/premierleague/rss](https://www.theguardian.com/football/premierleague/rss)"}
-        ]
+        return default_feeds
 
     def run_once(self):
         print(f"\n🚀 [{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] RSSニュース巡回・処理を開始します...")
@@ -991,7 +982,7 @@ class SoccerNewsBot:
             if not schedule_data:
                 print("❌ [SoccerNewsBot] スケジュール情報の生成に失敗しました。")
                 DiscordNotifier.send_system_log("試合スケジュールの生成に失敗しました（Gemini API応答なし）。")
-                return
+                raise RuntimeError("試合スケジュール情報の生成に失敗しました（全Geminiモデル応答なし/Quota上限）")
 
             formatted_msg = format_schedule_message(schedule_data)
             
