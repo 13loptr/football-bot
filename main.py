@@ -15,23 +15,19 @@ import traceback
 from typing import List, Dict, Optional, Set
 from datetime import datetime, timezone, timedelta
 
-# 非必須の警告を非表示
 warnings.filterwarnings("ignore")
 import requests
 import feedparser
 from dotenv import load_dotenv
 from pydantic import BaseModel, Field
 
-# .envファイルを読み込み
 load_dotenv()
 
-# スクリプト設置ディレクトリ
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 SENT_HISTORY_FILE = os.path.join(BASE_DIR, "sent_history.json")
 FEEDS_CONFIG_FILE = os.path.join(BASE_DIR, "feeds_config.json")
 LINEUP_HISTORY_FILE = os.path.join(BASE_DIR, "lineup_history.json")
 
-# Pydantic モデル（構造定義用）
 class MatchFixture(BaseModel):
     date_jst: str
     time_jst: str
@@ -57,7 +53,6 @@ class ArticleAnalysis(BaseModel):
     lineup_team: Optional[str] = None
 
 class LineupHistory:
-    """当日配信済みスタメン（日付+チーム名）の重複防止管理モジュール"""
     def __init__(self, filepath: str = LINEUP_HISTORY_FILE):
         self.filepath = filepath
         self.records: Set[str] = set()
@@ -72,7 +67,7 @@ class LineupHistory:
                         self.records = set(data)
                         return
             except Exception as e:
-                print(f"⚠️ [LineupHistory] スタメン送信履歴の読み込みに失敗しました ({e})。新規作成して自動修復します。")
+                print(f"⚠️ [LineupHistory] スタメン送信履歴の読み込み失敗 ({e})。新規作成します。")
         self.records = set()
         self.save()
 
@@ -96,10 +91,9 @@ class LineupHistory:
             with open(self.filepath, "w", encoding="utf-8") as f:
                 json.dump(list(self.records), f, ensure_ascii=False, indent=2)
         except Exception as e:
-            print(f"❌ [LineupHistory] スタメン送信履歴の保存に失敗しました: {e}")
+            print(f"❌ [LineupHistory] 保存失敗: {e}")
 
 def is_japanese_text(text: str) -> bool:
-    """テキストに日本語（ひらがな・カタカナ・漢字）が含まれているか検証"""
     if not text:
         return False
     return bool(re.search(r'[\u3040-\u309F\u30A0-\u30FF\u4E00-\u9FFF]', text))
@@ -114,7 +108,6 @@ class ArticleItem:
         self.image_url = image_url
 
 class SentHistory:
-    """送信済み記事URLの永続化管理モジュール"""
     def __init__(self, filepath: str = SENT_HISTORY_FILE, max_records: int = 5000):
         self.filepath = filepath
         self.max_records = max_records
@@ -130,7 +123,7 @@ class SentHistory:
                         self.sent_urls = set(data)
                         return
             except Exception as e:
-                print(f"⚠️ [SentHistory] 送信履歴ファイルの読み込みに失敗しました ({e})。ファイル構造を初期化して自動修復します。")
+                print(f"⚠️ [SentHistory] 送信履歴読み込み失敗 ({e})。初期化します。")
         self.sent_urls = set()
         self.save()
 
@@ -151,21 +144,24 @@ class SentHistory:
             with open(self.filepath, "w", encoding="utf-8") as f:
                 json.dump(urls_list, f, ensure_ascii=False, indent=2)
         except Exception as e:
-            print(f"❌ [SentHistory] 送信履歴ファイルの保存に失敗しました: {e}")
+            print(f"❌ [SentHistory] 保存失敗: {e}")
 
 
 class GroqProcessor:
-    """Groq API (Llama 3) を使用してニュースの日本語翻訳およびジャンル自動判別を行うモジュール"""
+    """Groq API を使用してニュースの日本語翻訳およびジャンル自動判別を行うモジュール"""
     def __init__(self, api_key: Optional[str] = None):
         key = api_key or os.getenv("GROQ_API_KEY", "")
         self.api_key = key.strip() if isinstance(key, str) else ""
         self.api_url = "https://api.groq.com/openai/v1/chat/completions"
-        self.model_name = "llama-3.3-70b-specdec" # 翻訳・分類に優れた大型・高速モデル
         
+        # 表の最上部にあった最新のモデル2種（メイン: 70b, 予備: 8b）
+        self.primary_model = "llama-3.3-70b-versatile"
+        self.fallback_model = "llama-3.1-8b-instant"
+
         if not self.api_key:
             print("ℹ️ [GroqProcessor] 有効な GROQ_API_KEY が未設定のため、キーワードベースの簡易処理モードで動きます。")
 
-    def process(self, article: ArticleItem, max_retries: int = 3, retry_delay: float = 2.0) -> ArticleAnalysis:
+    def process(self, article: ArticleItem, max_retries: int = 2) -> ArticleAnalysis:
         if not self.api_key:
             return self._fallback_process(article)
 
@@ -198,53 +194,53 @@ class GroqProcessor:
             "Authorization": f"Bearer {self.api_key}",
             "Content-Type": "application/json"
         }
-        
-        payload = {
-            "model": self.model_name,
-            "messages": [
-                {"role": "system", "content": system_prompt},
-                {"role": "user", "content": user_prompt}
-            ],
-            "response_format": {"type": "json_object"},
-            "temperature": 0.2
-        }
 
-        for attempt in range(1, max_retries + 1):
-            try:
-                res = requests.post(self.api_url, headers=headers, json=payload, timeout=20)
-                if res.status_code == 200:
-                    data = res.json()
-                    content = data["choices"][0]["message"]["content"]
-                    
-                    # JSONのクリーニング
-                    bt3 = "`" * 3
-                    content = re.sub(r"^" + bt3 + r"(?:json)?\s*", "", content.strip())
-                    content = re.sub(r"\s*" + bt3 + r"$", "", content)
-                    
-                    parsed_data = json.loads(content)
-                    analysis = ArticleAnalysis(**parsed_data)
+        for model in [self.primary_model, self.fallback_model]:
+            payload = {
+                "model": model,
+                "messages": [
+                    {"role": "system", "content": system_prompt},
+                    {"role": "user", "content": user_prompt}
+                ],
+                "response_format": {"type": "json_object"},
+                "temperature": 0.2
+            }
 
-                    if not is_japanese_text(analysis.title_ja):
-                        print(f"⚠️ [GroqProcessor] 翻訳未完了（日本語文字なし）。再試行します (試行 {attempt}/{max_retries})...")
-                        if attempt < max_retries:
-                            time.sleep(1.5)
+            for attempt in range(1, max_retries + 1):
+                try:
+                    res = requests.post(self.api_url, headers=headers, json=payload, timeout=20)
+                    if res.status_code == 200:
+                        data = res.json()
+                        content = data["choices"][0]["message"]["content"]
+                        
+                        bt3 = "`" * 3
+                        content = re.sub(r"^" + bt3 + r"(?:json)?\s*", "", content.strip())
+                        content = re.sub(r"\s*" + bt3 + r"$", "", content)
+                        
+                        parsed_data = json.loads(content)
+                        analysis = ArticleAnalysis(**parsed_data)
+
+                        if not is_japanese_text(analysis.title_ja):
+                            print(f"⚠️ [GroqProcessor] 翻訳未完了。再試行します ({model}, 試行 {attempt}/{max_retries})...")
+                            if attempt < max_retries:
+                                time.sleep(1.5)
+                                continue
+
+                        return analysis
+                    else:
+                        print(f"⚠️ [GroqProcessor] APIエラー (モデル: {model}, HTTP {res.status_code}): {res.text}")
+                        if res.status_code == 429:
+                            time.sleep(3.0 * attempt)
                             continue
+                        break
+                except Exception as e:
+                    print(f"⚠️ [GroqProcessor] 通信エラー ({model}): {e}")
+                    time.sleep(2.0)
 
-                    return analysis
-                else:
-                    print(f"⚠️ [GroqProcessor] APIエラー (HTTP {res.status_code}, 試行 {attempt}/{max_retries}): {res.text}")
-                    if res.status_code == 429: # Rate limit
-                        time.sleep(retry_delay * attempt)
-                        continue
-                    break # その他のエラーは抜ける
-            except Exception as e:
-                print(f"⚠️ [GroqProcessor] 通信エラー (試行 {attempt}/{max_retries}): {e}")
-                time.sleep(retry_delay)
-
-        print(f"❌ [GroqProcessor] 全てのリトライが失敗しました。フォールバック処理を適用します。")
+        print(f"❌ [GroqProcessor] 全モデルの試行が失敗しました。フォールバック処理を適用します。")
         return self._fallback_process(article)
 
-    def generate_schedule(self, max_retries: int = 3, retry_delay: float = 2.0) -> Optional[WeeklySchedule]:
+    def generate_schedule(self, max_retries: int = 2) -> Optional[WeeklySchedule]:
         if not self.api_key:
             return None
 
@@ -281,35 +277,36 @@ class GroqProcessor:
             "Authorization": f"Bearer {self.api_key}",
             "Content-Type": "application/json"
         }
-        
-        payload = {
-            "model": self.model_name,
-            "messages": [
-                {"role": "system", "content": system_prompt},
-                {"role": "user", "content": user_prompt}
-            ],
-            "response_format": {"type": "json_object"},
-            "temperature": 0.2
-        }
 
-        for attempt in range(1, max_retries + 1):
-            try:
-                res = requests.post(self.api_url, headers=headers, json=payload, timeout=30)
-                if res.status_code == 200:
-                    data = res.json()
-                    content = data["choices"][0]["message"]["content"]
-                    
-                    bt3 = "`" * 3
-                    content = re.sub(r"^" + bt3 + r"(?:json)?\s*", "", content.strip())
-                    content = re.sub(r"\s*" + bt3 + r"$", "", content)
-                    
-                    parsed_data = json.loads(content)
-                    return WeeklySchedule(**parsed_data)
-                elif res.status_code == 429:
-                    time.sleep(retry_delay * attempt)
-            except Exception as e:
-                print(f"⚠️ [GroqProcessor] スケジュール生成エラー (試行 {attempt}/{max_retries}): {e}")
-                time.sleep(retry_delay)
+        for model in [self.primary_model, self.fallback_model]:
+            payload = {
+                "model": model,
+                "messages": [
+                    {"role": "system", "content": system_prompt},
+                    {"role": "user", "content": user_prompt}
+                ],
+                "response_format": {"type": "json_object"},
+                "temperature": 0.2
+            }
+
+            for attempt in range(1, max_retries + 1):
+                try:
+                    res = requests.post(self.api_url, headers=headers, json=payload, timeout=30)
+                    if res.status_code == 200:
+                        data = res.json()
+                        content = data["choices"][0]["message"]["content"]
+                        
+                        bt3 = "`" * 3
+                        content = re.sub(r"^" + bt3 + r"(?:json)?\s*", "", content.strip())
+                        content = re.sub(r"\s*" + bt3 + r"$", "", content)
+                        
+                        parsed_data = json.loads(content)
+                        return WeeklySchedule(**parsed_data)
+                    elif res.status_code == 429:
+                        time.sleep(3.0 * attempt)
+                except Exception as e:
+                    print(f"⚠️ [GroqProcessor] スケジュール生成エラー ({model}): {e}")
+                    time.sleep(2.0)
 
         return None
 
@@ -431,7 +428,7 @@ def send_discord_chunks(webhook_url: str, text: str, max_length: int = 1900) -> 
                     success = False
             else:
                 success = False
-        except Exception as e:
+        except Exception:
             success = False
 
         time.sleep(1)
@@ -575,7 +572,7 @@ class DiscordNotifier:
                 {"name": "🔗 原文タイトル", "value": article.original_title[:1024], "inline": False}
             ],
             "footer": {
-                "text": "海外サッカー 自動ニュース配信 Bot | Groq Llama3 Powered"
+                "text": "海外サッカー 自動ニュース配信 Bot | Groq Powered"
             },
             "timestamp": datetime.now(timezone.utc).isoformat()
         }
@@ -697,7 +694,6 @@ class SoccerNewsBot:
                 for article in articles:
                     if self.sent_history.is_sent(article.link): continue
                     
-                    # Groqは非常に速く制限も緩いため待機時間を短縮
                     time.sleep(1.0)
                     analysis = self.ai_processor.process(article)
 
