@@ -14,6 +14,7 @@ import html
 import argparse
 import warnings
 import traceback
+import unicodedata
 from typing import List, Dict, Optional, Set
 from datetime import datetime, timezone, timedelta
 
@@ -95,6 +96,12 @@ class LineupHistory:
                 json.dump(list(self.records), f, ensure_ascii=False, indent=2)
         except Exception as e:
             print(f"❌ [LineupHistory] 保存失敗: {e}")
+
+def normalize_text(text: str) -> str:
+    """Unicode正規化(NFC)。濁点・合成文字の二重表示（例: Radonjiô̌̌）を防ぐ。"""
+    if not text:
+        return text
+    return unicodedata.normalize("NFC", text)
 
 def is_japanese_text(text: str) -> bool:
     if not text:
@@ -180,11 +187,18 @@ class GroqProcessor:
         
         【ジャンル(genre)分類の厳密なルール】
         ニュースの内容を深く分析し、以下のいずれか1つを正確に選んでください。
-        - transfers : 選手や監督の「移籍」「獲得」「ローン」「契約延長」に関する公式発表や噂のみ。
+        ニュースの「発信元メディア」ではなく、ニュースの「主役となっているクラブ・選手が所属するリーグ」で判定してください。
+        - transfers : 選手や監督の「移籍」「獲得」「ローン」「契約延長」に関する公式発表や噂のみ。移籍元・移籍先が複数リーグにまたがる場合は必ずこちらを優先。
         - japanese : 日本人選手や日本代表に関するニュース。
         - national : 日本以外の各国代表チームに関するニュース。
-        - laliga, premier, bundesliga, serie_a, ligue_1 : 各リーグの試合結果、怪我、戦術、クラブ内の出来事。
-        - general : どのカテゴリにも属さないもの（引退、サッカー界のビジネス、事件、その他のリーグなど）。
+        - laliga : レアル・マドリード、バルセロナ、アトレティコ・マドリード等、スペイン1部リーグ所属クラブの話題。
+        - premier : マンチェスター・シティ、マンチェスター・ユナイテッド、リバプール、アーセナル、チェルシー等、イングランド・プレミアリーグ所属クラブの話題。
+        - bundesliga : バイエルン、ドルトムント等、ドイツ・ブンデスリーガ所属クラブの話題。
+        - serie_a : ユベントス、ミラン、インテル等、イタリア・セリエA所属クラブの話題。
+        - ligue_1 : PSG、マルセイユ等、フランス・リーグアン所属クラブの話題。
+        - general : どのカテゴリにも属さないもの（引退、サッカー界のビジネス、事件、移籍が絡まない他リーグなど）。
+
+        【注意】記事がどのRSSサイト（例: kicker.de, MARCA等）から取得されたかに惑わされず、必ず記事の「内容（登場するクラブ・選手）」を基準に分類してください。
 
         出力は必ず以下のJSONフォーマットに完全に従うJSONオブジェクトとして返してください。
         """
@@ -237,6 +251,10 @@ class GroqProcessor:
                         
                         parsed_data = json.loads(content)
                         analysis = ArticleAnalysis(**parsed_data)
+                        analysis.title_ja = normalize_text(analysis.title_ja)
+                        analysis.summary_ja = normalize_text(analysis.summary_ja)
+                        if analysis.lineup_team:
+                            analysis.lineup_team = normalize_text(analysis.lineup_team)
 
                         if not is_japanese_text(analysis.title_ja):
                             if attempt < max_retries:
@@ -305,8 +323,11 @@ class GroqProcessor:
         genre = "general"
         if any(k in text for k in ["transfer", "sign", "deal", "移籍", "獲得"]): genre = "transfers"
         elif any(k in text for k in ["mitoma", "kubo", "endo"]): genre = "japanese"
-        elif any(k in text for k in ["real madrid", "barcelona", "la liga"]): genre = "laliga"
-        elif any(k in text for k in ["manchester city", "arsenal", "premier league"]): genre = "premier"
+        elif any(k in text for k in ["real madrid", "barcelona", "atletico madrid", "la liga"]): genre = "laliga"
+        elif any(k in text for k in ["manchester city", "manchester united", "liverpool", "arsenal", "chelsea", "tottenham", "premier league"]): genre = "premier"
+        elif any(k in text for k in ["bayern", "dortmund", "bundesliga"]): genre = "bundesliga"
+        elif any(k in text for k in ["juventus", "milan", "inter", "serie a"]): genre = "serie_a"
+        elif any(k in text for k in ["psg", "paris saint", "marseille", "ligue 1"]): genre = "ligue_1"
 
         return ArticleAnalysis(
             is_football=is_football,
@@ -324,8 +345,19 @@ def format_schedule_message(schedule: WeeklySchedule) -> str:
     return "\n".join(lines)
 
 def send_discord_chunks(webhook_url: str, text: str, max_length: int = 1900) -> bool:
-    if not text: return False
-    return True # 簡略化（必要に応じて復元）
+    if not text or not webhook_url:
+        return False
+    try:
+        for i in range(0, len(text), max_length):
+            chunk = text[i:i + max_length]
+            res = requests.post(webhook_url, json={"content": chunk}, timeout=10)
+            if res.status_code not in (200, 204):
+                print(f"❌ [Discord] スケジュール配信失敗: {res.text}")
+                return False
+        return True
+    except Exception as e:
+        print(f"💥 [Discord] スケジュール配信エラー: {e}")
+        return False
 
 class DiscordNotifier:
     GENRE_CONFIG = {
@@ -511,7 +543,8 @@ class RSSFetcher:
     @staticmethod
     def _clean_html(text: str) -> str:
         if not text: return ""
-        return html.unescape(re.sub(r'<[^>]+>', '', html.unescape(str(text)))).strip()
+        cleaned = html.unescape(re.sub(r'<[^>]+>', '', html.unescape(str(text)))).strip()
+        return normalize_text(cleaned)
 
     def fetch_feed(self, source_name: str, feed_url: str, max_articles: int = 5) -> List[ArticleItem]:
         articles = []
@@ -563,7 +596,99 @@ class SoccerNewsBot:
             except: self.feeds = default_feeds
         else: self.feeds = default_feeds
 
-def run_once(self):
+    def process_all_feeds(self):
+        """全RSSフィードを巡回し、新着ニュースをAI解析→Discord送信＆Threadsバッファへ追加"""
+        total_processed = 0
+        for feed in self.feeds:
+            name = feed.get("name", "Unknown")
+            url = feed.get("url", "")
+            if not url:
+                continue
+
+            print(f"🔎 [{name}] フィードを取得中...")
+            articles = self.fetcher.fetch_feed(name, url, self.max_per_feed)
+
+            for article in articles:
+                # 既に送信済み（URL or タイトル一致）ならスキップ
+                if self.sent_history.is_sent(article.link, article.original_title):
+                    continue
+
+                # AI解析（翻訳・分類）
+                try:
+                    analysis = self.ai_processor.process(article)
+                except Exception as e:
+                    print(f"⚠️ [{name}] AI解析に失敗: {e}")
+                    continue
+
+                # サッカー関連でなければ既読扱いにしてスキップ
+                if not analysis.is_football:
+                    self.sent_history.add(article.link, article.original_title)
+                    continue
+
+                # スタメン速報は同日重複を防止
+                if analysis.is_lineup and analysis.lineup_team:
+                    if self.lineup_history.is_lineup_sent(analysis.lineup_team):
+                        print(f"⏭️ [{analysis.lineup_team}] のスタメンは本日送信済みのためスキップします。")
+                        self.sent_history.add(article.link, article.original_title)
+                        continue
+                    self.lineup_history.add(analysis.lineup_team)
+
+                # Discordへ送信
+                self.notifier.send(article, analysis)
+
+                # Threads投稿用バッファへ追加
+                self.threads_buffer.add(article, analysis)
+
+                # 送信済み履歴に記録
+                self.sent_history.add(article.link, article.original_title)
+                total_processed += 1
+
+                if not self.dry_run:
+                    time.sleep(1.0)  # API/Webhookのレート制限を避けるための小休止
+
+        print(f"✅ 今回の巡回で {total_processed} 件の新しいニュースを処理しました。")
+
+    def run_schedule(self):
+        """直近1週間の試合スケジュールを生成してDiscordへ配信"""
+        print(f"🚀 [{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] 週間スケジュールの生成を開始します...")
+
+        schedule = self.ai_processor.generate_schedule()
+        if not schedule:
+            print("⚠️ スケジュールの生成に失敗、またはGROQ_API_KEY未設定のため処理を中断します。")
+            return
+
+        text = format_schedule_message(schedule)
+        webhook_url = self.notifier.webhooks.get("general")
+
+        if self.dry_run or not webhook_url:
+            print(f"\n📅 [Discord Dry-Run]:\n{text}")
+        else:
+            ok = send_discord_chunks(webhook_url, text)
+            if ok:
+                print("✅ 週間スケジュールをDiscordへ配信しました。")
+            else:
+                print("❌ 週間スケジュールの配信に失敗しました。")
+
+        print(f"🏁 [{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] スケジュール処理が完了しました。")
+
+    def run_loop(self, interval_minutes: int = 15):
+        """指定間隔で run_once を繰り返し実行し続ける（常駐プロセス用）"""
+        print(f"🔁 ループモードで起動しました（{interval_minutes}分間隔）。Ctrl+Cで終了します。")
+        while True:
+            try:
+                self.run_once()
+            except Exception as e:
+                print(f"💥 巡回処理中に予期しないエラーが発生しました: {e}")
+                traceback.print_exc()
+
+            print(f"😴 次回の巡回まで {interval_minutes} 分間待機します...")
+            try:
+                time.sleep(interval_minutes * 60)
+            except KeyboardInterrupt:
+                print("🛑 ループモードを終了します。")
+                break
+
+    def run_once(self):
         """1回のみ巡回と配信を実行（GitHub Actions用）"""
         print(f"🚀 [{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] RSSニュース巡回・処理を開始します...")
         
@@ -613,7 +738,7 @@ def run_once(self):
         self.sent_history.save()
         self.threads_buffer.save()
         print(f"🏁 [{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] 1回分の処理が正常に完了しました。")
-        
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--once", action="store_true")

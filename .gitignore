@@ -1,2 +1,7 @@
-.venv/
 .env
+sent_history.json
+lineup_history.json
+threads_buffer.json
+__pycache__/
+*.pyc
+.venv/
