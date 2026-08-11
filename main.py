@@ -108,11 +108,56 @@ class ArticleItem:
         self.image_url = image_url
 
 class SentHistory:
+    """送信済み記事URLとタイトルの永続化管理モジュール（重複防止強化版）"""
     def __init__(self, filepath: str = SENT_HISTORY_FILE, max_records: int = 5000):
         self.filepath = filepath
         self.max_records = max_records
         self.sent_urls: Set[str] = set()
+        self.sent_titles: Set[str] = set()
         self.load()
+
+    def load(self):
+        if os.path.exists(self.filepath):
+            try:
+                with open(self.filepath, "r", encoding="utf-8") as f:
+                    data = json.load(f)
+                    # 旧バージョンのリスト型互換性維持
+                    if isinstance(data, list):
+                        self.sent_urls = set(data)
+                    # 新バージョンの辞書型
+                    elif isinstance(data, dict):
+                        self.sent_urls = set(data.get("urls", []))
+                        self.sent_titles = set(data.get("titles", []))
+                    return
+            except Exception as e:
+                print(f"⚠️ [SentHistory] 読み込み失敗 ({e})。初期化します。")
+        self.sent_urls = set()
+        self.sent_titles = set()
+        self.save()
+
+    def is_sent(self, url: str, title: str) -> bool:
+        if url in self.sent_urls:
+            return True
+        # 記号や空白を無視してタイトルの一致をチェック（より厳密に重複を弾く）
+        clean_target = re.sub(r'\W+', '', title.lower())
+        for saved_title in self.sent_titles:
+            if clean_target == re.sub(r'\W+', '', saved_title.lower()):
+                return True
+        return False
+
+    def add(self, url: str, title: str):
+        self.sent_urls.add(url)
+        self.sent_titles.add(title)
+        self.save()
+
+    def save(self):
+        try:
+            urls_list = list(self.sent_urls)[-self.max_records:]
+            titles_list = list(self.sent_titles)[-self.max_records:]
+            with open(self.filepath, "w", encoding="utf-8") as f:
+                json.dump({"urls": urls_list, "titles": titles_list}, f, ensure_ascii=False, indent=2)
+        except Exception as e:
+            print(f"❌ [SentHistory] 保存失敗: {e}")
 
     def load(self):
         if os.path.exists(self.filepath):
@@ -485,7 +530,16 @@ class DiscordNotifier:
             return False
 
     def send(self, article: ArticleItem, analysis: ArticleAnalysis) -> bool:
+        # 【修正箇所1】まず最初に raw_genre を取得し、小文字にして safe_genre を定義する
+        raw_genre = getattr(analysis, "genre", "")
+        safe_genre = raw_genre.lower().strip() if isinstance(raw_genre, str) else "general"
+
+        # その上で単数形を複数形に補正する
+        if safe_genre == "transfer":
+            safe_genre = "transfers"
+
         is_lineup = getattr(analysis, "is_lineup", False)
+        
         if is_lineup:
             label_prefix = "【🚨 スタメン速報】"
             full_title = f"{label_prefix} {analysis.title_ja}"
@@ -495,7 +549,8 @@ class DiscordNotifier:
             category_label = f"🚨 スタメン速報 ({analysis.lineup_team})" if getattr(analysis, "lineup_team", None) else "🚨 スタメン速報"
             category_icon = "🚨"
 
-        elif getattr(analysis, "genre", "") == "transfers":
+        # 【修正箇所2】ここから下の getattr(analysis, "genre", "") をすべて safe_genre に変更
+        elif safe_genre == "transfers":
             label_prefix = self.NEWS_TYPE_MAP.get(getattr(analysis, "news_type", "news"), "【ニュース】")
             full_title = f"{label_prefix} {analysis.title_ja}"
             webhook_url = self.webhooks.get("transfers") or self.webhooks.get("general")
@@ -504,7 +559,7 @@ class DiscordNotifier:
             category_label = genre_info["label"]
             category_icon = genre_info["icon"]
 
-        elif getattr(analysis, "genre", "") == "japanese":
+        elif safe_genre == "japanese":
             label_prefix = self.NEWS_TYPE_MAP.get(getattr(analysis, "news_type", "news"), "【ニュース】")
             full_title = f"{label_prefix} {analysis.title_ja}"
             webhook_url = self.webhooks.get("japanese") or self.webhooks.get("general")
@@ -513,7 +568,7 @@ class DiscordNotifier:
             category_label = genre_info["label"]
             category_icon = genre_info["icon"]
 
-        elif getattr(analysis, "genre", "") == "national":
+        elif safe_genre == "national":
             label_prefix = self.NEWS_TYPE_MAP.get(getattr(analysis, "news_type", "news"), "【ニュース】")
             full_title = f"{label_prefix} {analysis.title_ja}"
             webhook_url = self.webhooks.get("national") or self.webhooks.get("general")
@@ -522,11 +577,12 @@ class DiscordNotifier:
             category_label = genre_info["label"]
             category_icon = genre_info["icon"]
 
-        elif getattr(analysis, "genre", "") in ("laliga", "premier", "bundesliga", "serie_a", "ligue_1"):
+        elif safe_genre in ("laliga", "premier", "bundesliga", "serie_a", "ligue_1"):
             label_prefix = self.NEWS_TYPE_MAP.get(getattr(analysis, "news_type", "news"), "【ニュース】")
             full_title = f"{label_prefix} {analysis.title_ja}"
-            genre_info = self.GENRE_CONFIG.get(analysis.genre, self.GENRE_CONFIG["general"])
-            webhook_url = self.webhooks.get(analysis.genre) or self.webhooks.get("general")
+            # 【修正箇所3】ここの analysis.genre も safe_genre に変更！
+            genre_info = self.GENRE_CONFIG.get(safe_genre, self.GENRE_CONFIG["general"])
+            webhook_url = self.webhooks.get(safe_genre) or self.webhooks.get("general")
             color = genre_info["color"]
             category_label = genre_info["label"]
             category_icon = genre_info["icon"]
@@ -692,29 +748,34 @@ class SoccerNewsBot:
                 articles = self.fetcher.fetch_feed(name, url, max_articles=self.max_per_feed)
 
                 for article in articles:
-                    if self.sent_history.is_sent(article.link): continue
+                    # ✨ 修正1: is_sent に article.original_title を追加
+                    if self.sent_history.is_sent(article.link, article.original_title): continue
                     
                     time.sleep(1.0)
                     analysis = self.ai_processor.process(article)
 
                     if not analysis or not analysis.title_ja or not is_japanese_text(analysis.title_ja):
-                        if not self.dry_run: self.sent_history.add(article.link)
+                        # ✨ 修正2: add に article.original_title を追加
+                        if not self.dry_run: self.sent_history.add(article.link, article.original_title)
                         continue
 
                     if not analysis.is_football:
-                        if not self.dry_run: self.sent_history.add(article.link)
+                        # ✨ 修正3: add に article.original_title を追加
+                        if not self.dry_run: self.sent_history.add(article.link, article.original_title)
                         continue
 
                     if getattr(analysis, "is_lineup", False) and getattr(analysis, "lineup_team", None):
                         if self.lineup_history.is_lineup_sent(analysis.lineup_team):
-                            if not self.dry_run: self.sent_history.add(article.link)
+                            # ✨ 修正4: add に article.original_title を追加
+                            if not self.dry_run: self.sent_history.add(article.link, article.original_title)
                             continue
 
                     total_new += 1
                     if self.notifier.send(article, analysis):
                         total_sent += 1
                         if not self.dry_run:
-                            self.sent_history.add(article.link)
+                            # ✨ 修正5: add に article.original_title を追加
+                            self.sent_history.add(article.link, article.original_title)
                             if getattr(analysis, "is_lineup", False) and getattr(analysis, "lineup_team", None):
                                 self.lineup_history.add(analysis.lineup_team)
             
