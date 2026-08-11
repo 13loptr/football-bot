@@ -553,90 +553,53 @@ class SoccerNewsBot:
             except: self.feeds = default_feeds
         else: self.feeds = default_feeds
 
-    def run_once(self):
-        print(f"\n🚀 [{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] RSSニュース巡回・処理を開始します...")
-        try:
-            for feed_info in self.feeds:
-                name, url = feed_info.get("name", "Unknown"), feed_info.get("url", "")
-                if not url: continue
-                
-                print(f"🔍 巡回中: {name}")
-                for article in self.fetcher.fetch_feed(name, url, self.max_per_feed):
-                    if self.sent_history.is_sent(article.link, article.original_title): continue
-                    
-                    time.sleep(1.0)
-                    analysis = self.ai_processor.process(article)
+def run_once(self):
+        """1回のみ巡回と配信を実行（GitHub Actions用）"""
+        print(f"🚀 [{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] RSSニュース巡回・処理を開始します...")
+        
+        # 1. 各RSSフィードから新しいニュースを取得してDiscordへ送信 ＆ Threadsバッファへ追加
+        self.process_all_feeds()
 
-                    if not analysis or not analysis.title_ja or not is_japanese_text(analysis.title_ja) or not analysis.is_football:
-                        if not self.dry_run: self.sent_history.add(article.link, article.original_title)
-                        continue
+        # 2. Threadsバッファ（物置）から最大3件を連続で安全に消化する
+        max_process_count = 3
+        processed_count = 0
 
-                    if getattr(analysis, "is_lineup", False) and getattr(analysis, "lineup_team", None):
-                        if self.lineup_history.is_lineup_sent(analysis.lineup_team):
-                            if not self.dry_run: self.sent_history.add(article.link, article.original_title)
-                            continue
+        print(f"📦 現在Threadsバッファ（物置）に溜まっているニュース: {self.threads_buffer.get_count()} 件")
 
-                    # Discordへの送信
-                    if self.notifier.send(article, analysis) and not self.dry_run:
-                        self.sent_history.add(article.link, article.original_title)
-                        
-                        # 🆕 Threadsバッファへ追加（URLは排除される）
-                        self.threads_buffer.add(article, analysis)
-
-                        if getattr(analysis, "is_lineup", False) and getattr(analysis, "lineup_team", None):
-                            self.lineup_history.add(analysis.lineup_team)
+        while processed_count < max_process_count:
+            # バッファから先頭の1件を取得（消費）
+            next_item = self.threads_buffer.pop_next()
             
-            # --- 🆕 Threadsへの単独・ランダム時間差投稿処理 ---
-            queue = self.threads_buffer.queue
-            if queue:
-                # キューから最も古い（先頭の）1件だけを取り出す
-                target_item = queue.pop(0)
-                
-                # エラーでの消失を防ぐため、残りのキューを先に保存
-                self.threads_buffer.save()
+            if not next_item:
+                if processed_count == 0:
+                    print("ℹ️ Threadsに投稿待ちのニュースはありません。")
+                else:
+                    print(f"✨ バッファが空になったため、計 {processed_count} 件の投稿で処理を終了します。")
+                break
 
-                # ランダム待機（60〜240秒）の計算
-                sleep_time = random.randint(60, 240)
-                print(f"\n⏳ BOT判定回避: {sleep_time}秒待機してからThreadsへ投稿します...")
-                
+            processed_count += 1
+            print(f"📱 [{processed_count}/{max_process_count}件目] Threadsへの投稿プロセスを開始します...")
+
+            # 投稿文を組み立てる
+            threads_text = self.threads_notifier.build_text(next_item)
+
+            # Bot判定（シャドウバン）を完全に回避するためのランダム待機（90秒〜180秒）
+            # ※2件目以降の投稿がある場合のみ待機を挟みます（1件目は即投稿して時間を節約）
+            if processed_count > 1:
+                wait_time = random.randint(90, 180)
+                print(f"⏳ 連投によるBot判定を回避するため、{wait_time} 秒間ランダム待機します...")
                 if not self.dry_run:
-                    time.sleep(sleep_time)
-                
-                # フォーマット整形と投稿
-                threads_text = self.threads_notifier.build_text(target_item)
-                self.threads_notifier.post_text(threads_text)
-            else:
-                print("\nℹ️ Threadsに投稿待ちのニュースはありません。")
+                    time.sleep(wait_time)
 
-        except Exception as e:
-            print(f"💥 エラー: {e}")
-            sys.exit(1)
+            # Threadsへ投稿
+            success = self.threads_notifier.post_text(threads_text)
+            
+            if not success:
+                print("❌ Threadsへの投稿に失敗したため、このアイテムをバッファの先頭に戻して処理を中断します。")
+                self.threads_buffer.prepend(next_item)
+                break
 
-    def run_schedule(self):
-        schedule_data = self.ai_processor.generate_schedule()
-        if schedule_data and not self.dry_run:
-            webhook = os.getenv("WEBHOOK_SCHEDULE", "").strip()
-            if webhook: send_discord_chunks(webhook, format_schedule_message(schedule_data))
-
-    def run_loop(self, interval_minutes: int = 15):
-        while True:
-            self.run_once()
-            time.sleep(interval_minutes * 60)
-
-def main():
-    parser = argparse.ArgumentParser()
-    parser.add_argument("--once", action="store_true")
-    parser.add_argument("--loop", action="store_true")
-    parser.add_argument("--schedule", action="store_true")
-    parser.add_argument("--dry-run", action="store_true")
-    parser.add_argument("--limit", type=int, default=5)
-    parser.add_argument("--interval", type=int, default=15)
-    args = parser.parse_args()
-
-    bot = SoccerNewsBot(dry_run=args.dry_run, max_per_feed=args.limit)
-    if args.schedule: bot.run_schedule()
-    elif args.loop: bot.run_loop(interval_minutes=args.interval)
-    else: bot.run_once()
-
-if __name__ == "__main__":
-    main()
+        # 最後に配信履歴と Threads バッファの状態を保存
+        self.sent_history.save()
+        self.threads_buffer.save()
+        print(f"🏁 [{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] 1回分の処理が正常に完了しました。")
