@@ -429,15 +429,15 @@ class ThreadsBuffer:
 class ThreadsNotifier:
     """Threadsへの自動投稿管理（視認性ヘッダー・文字数制限安全弁付き）"""
     HEADER_MAP = {
-        "transfers": "【🔄移籍・噂】",
-        "japanese": "【🇯🇵日本人選手】",
-        "national": "【🌐代表ニュース】",
-        "laliga": "【🇪🇸ラ・リーガ】",
-        "premier": "【🏴󠁧󠁢󠁥󠁮󠁧󠁿プレミアリーグ】",
-        "bundesliga": "【🇩🇪ブンデスリーガ】",
-        "serie_a": "【🇮🇹セリエA】",
-        "ligue_1": "【🇫🇷リーグ・アン】",
-        "general": "【⚽ニュース】"
+        "transfers": "🔄移籍・噂",
+        "japanese": "🇯🇵日本人選手",
+        "national": "🌐代表ニュース",
+        "laliga": "🇪🇸ラ・リーガ",
+        "premier": "🏴󠁧󠁢󠁥󠁮󠁧󠁿プレミアリーグ",
+        "bundesliga": "🇩🇪ブンデスリーガ",
+        "serie_a": "🇮🇹セリエA",
+        "ligue_1": "🇫🇷リーグ・アン",
+        "general": "⚽ニュース"
     }
 
     def __init__(self, dry_run: bool = False):
@@ -451,7 +451,13 @@ class ThreadsNotifier:
         if genre == "transfer": genre = "transfers"
         header = self.HEADER_MAP.get(genre, self.HEADER_MAP["general"])
 
-        text = f"{header}\n{item['title']}\n\n{item['summary']}\n\n(ソース: {item['source']})\n\n#REGAL #海外サッカー"
+        # ハッシュタグを完全削除し、不要な改行を詰めてスマートなレイアウトに
+        # AIの要約（summary）とソース元だけをシンプルに繋ぎます
+        text = f"{header}\n{item['title']}\n\n{item['summary']}\n\nソース: {item['source']}"
+        
+        # 念のため、AIの本文に「【】」や「#」が混入していた場合の強制排除セーフティ
+        text = text.replace("【", "").replace("】", "").replace("#", "")
+        
         return text
 
     def post_text(self, text: str) -> bool:
