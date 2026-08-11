@@ -425,6 +425,16 @@ class ThreadsBuffer:
                 json.dump(self.queue, f, ensure_ascii=False, indent=2)
         except Exception as e:
             print(f"❌ [ThreadsBuffer] 保存失敗: {e}")
+    def get_count(self) -> int:
+        return len(self.queue)
+
+    def pop_next(self) -> Optional[Dict]:
+        if not self.queue:
+            return None
+        return self.queue.pop(0)
+
+    def prepend(self, item: Dict):
+        self.queue.insert(0, item)
 
 class ThreadsNotifier:
     """Threadsへの自動投稿管理（視認性ヘッダー・文字数制限安全弁付き）"""
@@ -603,3 +613,21 @@ def run_once(self):
         self.sent_history.save()
         self.threads_buffer.save()
         print(f"🏁 [{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] 1回分の処理が正常に完了しました。")
+        
+def main():
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--once", action="store_true")
+    parser.add_argument("--loop", action="store_true")
+    parser.add_argument("--schedule", action="store_true")
+    parser.add_argument("--dry-run", action="store_true")
+    parser.add_argument("--limit", type=int, default=5)
+    parser.add_argument("--interval", type=int, default=15)
+    args = parser.parse_args()
+
+    bot = SoccerNewsBot(dry_run=args.dry_run, max_per_feed=args.limit)
+    if args.schedule: bot.run_schedule()
+    elif args.loop: bot.run_loop(interval_minutes=args.interval)
+    else: bot.run_once()
+
+if __name__ == "__main__":
+    main()
