@@ -14,6 +14,11 @@ jobs:
     name: News Bot (--once)
     runs-on: ubuntu-latest
     if: github.event_name == 'workflow_dispatch' || github.event.schedule == '*/15 * * * *' || github.event.schedule != '0 23 * * 0'
+    
+    # ★リポジトリへの書き込み権限を付与★
+    permissions:
+      contents: write
+      
     steps:
       - name: Check out repository
         uses: actions/checkout@v4
@@ -30,7 +35,6 @@ jobs:
 
       - name: Run Soccer News Bot
         env:
-          # ★ Groq APIキーを追加しました ★
           GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
           GEMINI_MODEL: ${{ secrets.GEMINI_MODEL }}
@@ -44,7 +48,19 @@ jobs:
           WEBHOOK_LIGUE_1: ${{ secrets.WEBHOOK_LIGUE_1 }}
           WEBHOOK_GENERAL: ${{ secrets.WEBHOOK_GENERAL }}
           WEBHOOK_LINEUP: ${{ secrets.WEBHOOK_LINEUP }}
+          # ★ Threads用のSecretを追加 ★
+          THREADS_USER_ID: ${{ secrets.THREADS_USER_ID }}
+          THREADS_ACCESS_TOKEN: ${{ secrets.THREADS_ACCESS_TOKEN }}
         run: python3 main.py --once
+
+      # ★ 更新された履歴とバッファを自動保存（コミット＆プッシュ）するステップを追加 ★
+      - name: Commit and push changes
+        run: |
+          git config --local user.email "github-actions[bot]@users.noreply.github.com"
+          git config --local user.name "github-actions[bot]"
+          git add sent_history.json lineup_history.json threads_buffer.json || true
+          git commit -m "Auto-update history and threads buffer" || echo "No changes to commit"
+          git push
 
   # ジョブ2: 毎週月曜朝8時 JST (日曜23:00 UTC) の試合スケジュール配信 (--schedule)
   schedule-bot:
@@ -67,7 +83,6 @@ jobs:
 
       - name: Run Match Schedule Bot
         env:
-          # ★ スケジュール側にも Groq APIキーを追加 ★
           GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
           GEMINI_MODEL: ${{ secrets.GEMINI_MODEL }}
