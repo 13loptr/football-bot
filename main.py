@@ -108,7 +108,6 @@ class ArticleItem:
         self.image_url = image_url
 
 class SentHistory:
-    """送信済み記事URLとタイトルの永続化管理モジュール（重複防止強化版）"""
     def __init__(self, filepath: str = SENT_HISTORY_FILE, max_records: int = 5000):
         self.filepath = filepath
         self.max_records = max_records
@@ -121,10 +120,8 @@ class SentHistory:
             try:
                 with open(self.filepath, "r", encoding="utf-8") as f:
                     data = json.load(f)
-                    # 旧バージョンのリスト型互換性維持
                     if isinstance(data, list):
                         self.sent_urls = set(data)
-                    # 新バージョンの辞書型
                     elif isinstance(data, dict):
                         self.sent_urls = set(data.get("urls", []))
                         self.sent_titles = set(data.get("titles", []))
@@ -138,7 +135,6 @@ class SentHistory:
     def is_sent(self, url: str, title: str) -> bool:
         if url in self.sent_urls:
             return True
-        # 記号や空白を無視してタイトルの一致をチェック（より厳密に重複を弾く）
         clean_target = re.sub(r'\W+', '', title.lower())
         for saved_title in self.sent_titles:
             if clean_target == re.sub(r'\W+', '', saved_title.lower()):
@@ -161,26 +157,34 @@ class SentHistory:
 
 
 class GroqProcessor:
-    """Groq API を使用してニュースの日本語翻訳およびジャンル自動判別を行うモジュール"""
     def __init__(self, api_key: Optional[str] = None):
         key = api_key or os.getenv("GROQ_API_KEY", "")
         self.api_key = key.strip() if isinstance(key, str) else ""
         self.api_url = "https://api.groq.com/openai/v1/chat/completions"
-        
-        # 表の最上部にあった最新のモデル2種（メイン: 70b, 予備: 8b）
         self.primary_model = "llama-3.3-70b-versatile"
         self.fallback_model = "llama-3.1-8b-instant"
 
         if not self.api_key:
-            print("ℹ️ [GroqProcessor] 有効な GROQ_API_KEY が未設定のため、キーワードベースの簡易処理モードで動きます。")
+            print("ℹ️ [GroqProcessor] 有効な GROQ_API_KEY が未設定。簡易処理モードで動きます。")
 
     def process(self, article: ArticleItem, max_retries: int = 2) -> ArticleAnalysis:
         if not self.api_key:
             return self._fallback_process(article)
 
+        # ✨ ここを大幅に修正し、AIに「移籍とそれ以外」の違いを厳密に学習させます
         system_prompt = """
         あなたは海外サッカーに詳しいプロのスポーツジャーナリスト兼翻訳家です。
         【絶対命令】title_ja と summary_ja は絶対に100%日本語に翻訳・要約してください。英語のままは厳禁です。
+        
+        【ジャンル(genre)分類の厳密なルール】
+        ニュースの内容を深く分析し、以下のいずれか1つを正確に選んでください。
+        - transfers : 選手や監督の「移籍」「獲得」「ローン」「契約延長」に関する公式発表や噂のみ。
+          ※注意※ 「現役引退(休止)」「解任」「移籍に直接関係ない事件・裁判・逮捕」はここに含めず、generalなどにしてください。
+        - japanese : 日本人選手や日本代表に関するニュース。
+        - national : 日本以外の各国代表チームに関するニュース。
+        - laliga, premier, bundesliga, serie_a, ligue_1 : 各リーグの試合結果、怪我、戦術、クラブ内の出来事。
+        - general : どのカテゴリにも属さないもの（引退、サッカー界のビジネス、事件、その他のリーグなど）。
+
         出力は必ず以下のJSONフォーマット（キーと値の構造）に完全に従うJSONオブジェクトとして返してください。
         """
 
@@ -234,23 +238,19 @@ class GroqProcessor:
                         analysis = ArticleAnalysis(**parsed_data)
 
                         if not is_japanese_text(analysis.title_ja):
-                            print(f"⚠️ [GroqProcessor] 翻訳未完了。再試行します ({model}, 試行 {attempt}/{max_retries})...")
                             if attempt < max_retries:
                                 time.sleep(1.5)
                                 continue
 
                         return analysis
                     else:
-                        print(f"⚠️ [GroqProcessor] APIエラー (モデル: {model}, HTTP {res.status_code}): {res.text}")
                         if res.status_code == 429:
                             time.sleep(3.0 * attempt)
                             continue
                         break
-                except Exception as e:
-                    print(f"⚠️ [GroqProcessor] 通信エラー ({model}): {e}")
+                except Exception:
                     time.sleep(2.0)
 
-        print(f"❌ [GroqProcessor] 全モデルの試行が失敗しました。フォールバック処理を適用します。")
         return self._fallback_process(article)
 
     def generate_schedule(self, max_retries: int = 2) -> Optional[WeeklySchedule]:
@@ -317,20 +317,18 @@ class GroqProcessor:
                         return WeeklySchedule(**parsed_data)
                     elif res.status_code == 429:
                         time.sleep(3.0 * attempt)
-                except Exception as e:
-                    print(f"⚠️ [GroqProcessor] スケジュール生成エラー ({model}): {e}")
+                except Exception:
                     time.sleep(2.0)
 
         return None
 
     def _fallback_process(self, article: ArticleItem) -> ArticleAnalysis:
         text = (article.original_title + " " + article.summary).lower()
-
         non_football_keywords = ["tennis", "f1", "formula 1", "golf", "nba", "basketball", "baseball", "cricket", "rugby", "motogp", "wimbledon", "us open", "テニス", "ゴルフ"]
         is_football = not any(k in text for k in non_football_keywords)
 
         japanese_keywords = ["mitoma", "kubo", "endo", "tomiyasu", "furuhashi", "minamino", "doan", "sugawara", "kamada", "ito", "japan", "samurai blue", "ゲキサカ", "フットボールチャンネル"]
-        transfer_keywords = ["transfer", "sign", "deal", "contract", "target", "bid", "loan", "move", "joined", "fee", "agreed", "rumour", "rumor", "移籍", "獲得", "加入", "退団", "契約"]
+        transfer_keywords = ["transfer", "sign", "deal", "contract", "target", "bid", "loan", "move", "joined", "fee", "agreed", "rumour", "rumor", "移籍", "獲得", "加入"]
         laliga_keywords = ["real madrid", "barcelona", "barca", "atletico", "la liga", "spain", "real sociedad", "girona", "sevilla", "betis", "バルセロナ", "レアル"]
         premier_keywords = ["manchester city", "man city", "arsenal", "liverpool", "manchester united", "man utd", "chelsea", "tottenham", "spurs", "premier league", "england", "プレミア"]
         bundesliga_keywords = ["bundesliga", "bayern", "dortmund", "leverkusen", "stuttgart", "leipzig", "germany", "バイエルン", "ドルトムント"]
@@ -373,7 +371,6 @@ class GroqProcessor:
             lineup_team=article.source_name if is_lineup else None
         )
 
-
 def format_schedule_message(schedule: WeeklySchedule) -> str:
     lines = []
     lines.append("📅 **【欧州サッカー＆注目マッチ 直近1週間試合スケジュール】**")
@@ -388,7 +385,6 @@ def format_schedule_message(schedule: WeeklySchedule) -> str:
         lines.append("※今週の主要ピックアップカードはありません。")
     
     lines.append("\n──────────────────────────────────────────────────\n")
-
     lines.append("⚽ **【直近7日間の対戦カード一覧 (JST)】**")
     
     current_date = None
@@ -400,11 +396,8 @@ def format_schedule_message(schedule: WeeklySchedule) -> str:
         
     return "\n".join(lines)
 
-
 def send_discord_chunks(webhook_url: str, text: str, max_length: int = 1900) -> bool:
-    if not text:
-        return False
-
+    if not text: return False
     chunks = []
     current_chunk = []
     current_length = 0
@@ -416,7 +409,6 @@ def send_discord_chunks(webhook_url: str, text: str, max_length: int = 1900) -> 
                 chunks.append("\n".join(current_chunk))
                 current_chunk = []
                 current_length = 0
-
         current_chunk.append(line)
         current_length += line_len
 
@@ -426,28 +418,16 @@ def send_discord_chunks(webhook_url: str, text: str, max_length: int = 1900) -> 
     success = True
     total_parts = len(chunks)
     for idx, chunk in enumerate(chunks, 1):
-        payload = {"content": chunk}
-        if total_parts > 1:
-            print(f"📦 [DiscordNotifier] メッセージ送信 (Part {idx}/{total_parts})...")
         try:
-            res = requests.post(webhook_url, json=payload, timeout=10)
-            if res.status_code in (200, 204):
-                print(f"✅ [DiscordNotifier] 送信成功 (Part {idx}/{total_parts})")
-            elif res.status_code == 429:
-                retry_after = res.json().get("retry_after", 5)
-                time.sleep(retry_after)
-                res_retry = requests.post(webhook_url, json=payload, timeout=10)
-                if res_retry.status_code not in (200, 204):
-                    success = False
-            else:
-                success = False
+            res = requests.post(webhook_url, json={"content": chunk}, timeout=10)
+            if res.status_code == 429:
+                time.sleep(res.json().get("retry_after", 5))
+                res = requests.post(webhook_url, json={"content": chunk}, timeout=10)
+            if res.status_code not in (200, 204): success = False
         except Exception:
             success = False
-
         time.sleep(1)
-
     return success
-
 
 class DiscordNotifier:
     GENRE_CONFIG = {
@@ -461,125 +441,44 @@ class DiscordNotifier:
         "ligue_1": {"label": "リーグ・アン", "color": 0x091C3E, "env_var": "WEBHOOK_LIGUE_1", "icon": "🇫🇷"},
         "general": {"label": "総合ニュース", "color": 0x3498DB, "env_var": "WEBHOOK_GENERAL", "icon": "⚽"},
     }
-
-    NEWS_TYPE_MAP = {
-        "official": "【公式/確定】",
-        "rumor": "【噂/ゴシップ】",
-        "news": "【ニュース】"
-    }
+    NEWS_TYPE_MAP = {"official": "【公式/確定】", "rumor": "【噂/ゴシップ】", "news": "【ニュース】"}
 
     def __init__(self, dry_run: bool = False):
         self.dry_run = dry_run
-        self.webhooks = {}
-        for genre, config in self.GENRE_CONFIG.items():
-            self.webhooks[genre] = os.getenv(config["env_var"], "").strip()
-
-    @staticmethod
-    def send_system_log(message: str, error: Optional[Exception] = None) -> bool:
-        webhook_url = os.getenv("WEBHOOK_SYSTEM", "").strip()
-        if not webhook_url:
-            return False
-
-        error_details = ""
-        if error:
-            tb_lines = traceback.format_exception(type(error), error, error.__traceback__)
-            error_details = "".join(tb_lines)[-1400:]
-
-        jst_time = datetime.now(timezone(timedelta(hours=9))).strftime("%Y-%m-%d %H:%M:%S")
-        bt3 = "`" * 3
-        content = f"🚨 **【KICK システムエラー発生アラート】**\n⏰ **発生時刻 (JST):** `{jst_time}`\n📝 **概要:** {message}"
-        if error_details:
-            content += f"\n\n🔍 **スタックトレース:**\n{bt3}python\n{error_details}\n{bt3}"
-
-        try:
-            res = requests.post(webhook_url, json={"content": content[:1950]}, timeout=10)
-            return res.status_code in (200, 204)
-        except Exception:
-            return False
+        self.webhooks = {g: os.getenv(c["env_var"], "").strip() for g, c in self.GENRE_CONFIG.items()}
 
     def send(self, article: ArticleItem, analysis: ArticleAnalysis) -> bool:
         raw_genre = getattr(analysis, "genre", "")
         safe_genre = raw_genre.lower().strip() if isinstance(raw_genre, str) else "general"
-
-        if safe_genre == "transfer":
-            safe_genre = "transfers"
+        if safe_genre == "transfer": safe_genre = "transfers"
 
         is_lineup = getattr(analysis, "is_lineup", False)
         
         if is_lineup:
-            label_prefix = "【🚨 スタメン速報】"
-            full_title = f"{label_prefix} {analysis.title_ja}"
-            lineup_webhook = os.getenv("WEBHOOK_LINEUP", "").strip()
-            webhook_url = lineup_webhook if lineup_webhook else self.webhooks.get("general")
+            full_title = f"【🚨 スタメン速報】 {analysis.title_ja}"
+            webhook_url = os.getenv("WEBHOOK_LINEUP", "").strip() or self.webhooks.get("general")
             color = 0xE74C3C
             category_label = f"🚨 スタメン速報 ({analysis.lineup_team})" if getattr(analysis, "lineup_team", None) else "🚨 スタメン速報"
             category_icon = "🚨"
-
         elif safe_genre == "transfers":
-            label_prefix = self.NEWS_TYPE_MAP.get(getattr(analysis, "news_type", "news"), "【ニュース】")
-            full_title = f"{label_prefix} {analysis.title_ja}"
+            full_title = f"{self.NEWS_TYPE_MAP.get(getattr(analysis, 'news_type', 'news'), '【ニュース】')} {analysis.title_ja}"
             webhook_url = self.webhooks.get("transfers") or self.webhooks.get("general")
-            genre_info = self.GENRE_CONFIG["transfers"]
-            color = genre_info["color"]
-            category_label = genre_info["label"]
-            category_icon = genre_info["icon"]
-
-        elif safe_genre == "japanese":
-            label_prefix = self.NEWS_TYPE_MAP.get(getattr(analysis, "news_type", "news"), "【ニュース】")
-            full_title = f"{label_prefix} {analysis.title_ja}"
-            webhook_url = self.webhooks.get("japanese") or self.webhooks.get("general")
-            genre_info = self.GENRE_CONFIG["japanese"]
-            color = genre_info["color"]
-            category_label = genre_info["label"]
-            category_icon = genre_info["icon"]
-
-        elif safe_genre == "national":
-            label_prefix = self.NEWS_TYPE_MAP.get(getattr(analysis, "news_type", "news"), "【ニュース】")
-            full_title = f"{label_prefix} {analysis.title_ja}"
-            webhook_url = self.webhooks.get("national") or self.webhooks.get("general")
-            genre_info = self.GENRE_CONFIG["national"]
-            color = genre_info["color"]
-            category_label = genre_info["label"]
-            category_icon = genre_info["icon"]
-
-        elif safe_genre in ("laliga", "premier", "bundesliga", "serie_a", "ligue_1"):
-            label_prefix = self.NEWS_TYPE_MAP.get(getattr(analysis, "news_type", "news"), "【ニュース】")
-            full_title = f"{label_prefix} {analysis.title_ja}"
-            genre_info = self.GENRE_CONFIG.get(safe_genre, self.GENRE_CONFIG["general"])
+            color, category_label, category_icon = self.GENRE_CONFIG["transfers"]["color"], self.GENRE_CONFIG["transfers"]["label"], self.GENRE_CONFIG["transfers"]["icon"]
+        elif safe_genre in self.GENRE_CONFIG and safe_genre != "general":
+            full_title = f"{self.NEWS_TYPE_MAP.get(getattr(analysis, 'news_type', 'news'), '【ニュース】')} {analysis.title_ja}"
             webhook_url = self.webhooks.get(safe_genre) or self.webhooks.get("general")
-            color = genre_info["color"]
-            category_label = genre_info["label"]
-            category_icon = genre_info["icon"]
-
+            color, category_label, category_icon = self.GENRE_CONFIG[safe_genre]["color"], self.GENRE_CONFIG[safe_genre]["label"], self.GENRE_CONFIG[safe_genre]["icon"]
         else:
-            label_prefix = self.NEWS_TYPE_MAP.get(getattr(analysis, "news_type", "news"), "【ニュース】")
-            full_title = f"{label_prefix} {analysis.title_ja}"
-            genre_info = self.GENRE_CONFIG["general"]
+            full_title = f"{self.NEWS_TYPE_MAP.get(getattr(analysis, 'news_type', 'news'), '【ニュース】')} {analysis.title_ja}"
             webhook_url = self.webhooks.get("general")
-            color = genre_info["color"]
-            category_label = genre_info["label"]
-            category_icon = genre_info["icon"]
+            color, category_label, category_icon = self.GENRE_CONFIG["general"]["color"], self.GENRE_CONFIG["general"]["label"], self.GENRE_CONFIG["general"]["icon"]
 
         primary_src = getattr(analysis, "primary_source", "") or "独自記事"
-        if primary_src and primary_src != "独自記事" and primary_src != article.source_name:
-            source_display = f"{article.source_name} (引用: {primary_src})"
-        else:
-            source_display = f"独自記事（{article.source_name}）"
+        source_display = f"{article.source_name} (引用: {primary_src})" if primary_src and primary_src not in ("独自記事", article.source_name) else f"独自記事（{article.source_name}）"
 
-        print(f"\n──────────────────────────────────────────────────")
-        print(f"📰 [{category_icon} {category_label}] {full_title}")
-        print(f"🔗 原文: {article.original_title} ({article.source_name})")
-        print(f"📝 概要: {analysis.summary_ja}")
-        print(f"📰 情報源: {source_display}")
-        print(f"🌐 URL: {article.link}")
+        print(f"\n📰 [{category_icon} {category_label}] {full_title}")
 
-        if self.dry_run:
-            print("💡 [DRY-RUN] Discord送信をスキップしました。")
-            return True
-
-        if not webhook_url:
-            print(f"⚠️ [DiscordNotifier] Webhook URLが設定されていません。スキップします。")
-            return False
+        if self.dry_run or not webhook_url: return False
 
         embed = {
             "title": full_title,
@@ -591,63 +490,25 @@ class DiscordNotifier:
                 {"name": "🏷️ カテゴリ", "value": f"{category_icon} {category_label}", "inline": True},
                 {"name": "🔗 原文タイトル", "value": article.original_title[:1024], "inline": False}
             ],
-            "footer": {
-                "text": "海外サッカー 自動ニュース配信 Bot | Groq Powered"
-            },
+            "footer": {"text": "海外サッカー 自動ニュース配信 Bot | Groq Powered"},
             "timestamp": datetime.now(timezone.utc).isoformat()
         }
-
-        if article.image_url:
-            embed["image"] = {"url": article.image_url}
-
-        payload = {
-            "embeds": [embed]
-        }
+        if article.image_url: embed["image"] = {"url": article.image_url}
 
         try:
-            res = requests.post(webhook_url, json=payload, timeout=10)
-            if res.status_code in (200, 204):
-                print(f"✅ [DiscordNotifier] Discordへの送信成功 ({category_label})")
-                return True
-            elif res.status_code == 429:
-                retry_after = res.json().get("retry_after", 5)
-                time.sleep(retry_after)
-                res_retry = requests.post(webhook_url, json=payload, timeout=10)
-                return res_retry.status_code in (200, 204)
-            else:
-                print(f"❌ [DiscordNotifier] 送信失敗 (HTTP {res.status_code}): {res.text}")
-                return False
-        except Exception as e:
-            print(f"❌ [DiscordNotifier] 通信エラー: {e}")
+            res = requests.post(webhook_url, json={"embeds": [embed]}, timeout=10)
+            if res.status_code == 429:
+                time.sleep(res.json().get("retry_after", 5))
+                res = requests.post(webhook_url, json={"embeds": [embed]}, timeout=10)
+            return res.status_code in (200, 204)
+        except Exception:
             return False
-
 
 class RSSFetcher:
     @staticmethod
     def _clean_html(text: str) -> str:
-        if not text:
-            return ""
-        text = html.unescape(str(text))
-        clean_text = re.sub(r'<[^>]+>', '', text)
-        clean_text = html.unescape(clean_text)
-        clean_text = re.sub(r'\s+', ' ', clean_text).strip()
-        return clean_text
-
-    @staticmethod
-    def _extract_summary_raw(entry) -> str:
-        summary = entry.get("summary", "") if isinstance(entry, dict) else getattr(entry, "summary", "")
-        if summary: return str(summary)
-        desc = entry.get("description", "") if isinstance(entry, dict) else getattr(entry, "description", "")
-        if desc: return str(desc)
-        return ""
-
-    @staticmethod
-    def _extract_image(entry) -> Optional[str]:
-        media_content = getattr(entry, "media_content", None) or (entry.get("media_content", None) if isinstance(entry, dict) else None)
-        if media_content:
-            for media in media_content:
-                if isinstance(media, dict) and media.get("url"): return media["url"]
-        return None
+        if not text: return ""
+        return html.unescape(re.sub(r'<[^>]+>', '', html.unescape(str(text)))).strip()
 
     def fetch_feed(self, source_name: str, feed_url: str, max_articles: int = 5) -> List[ArticleItem]:
         articles = []
@@ -656,23 +517,22 @@ class RSSFetcher:
             elif "gazzetta.it/rss/Calcio.xml" in feed_url: feed_url = "https://www.gazzetta.it/rss/calcio.xml"
             elif "xml.lequipe.fr" in feed_url: feed_url = "https://www.footmercato.net/flux-rss"
 
-            headers = {"User-Agent": "Mozilla/5.0"}
-            session = requests.Session()
-            res = session.get(feed_url, headers=headers, timeout=12, allow_redirects=True)
+            res = requests.Session().get(feed_url, headers={"User-Agent": "Mozilla/5.0"}, timeout=12)
             parsed = feedparser.parse(res.content) if res.status_code == 200 else feedparser.parse(feed_url)
 
             for entry in getattr(parsed, "entries", [])[:max_articles]:
-                title = self._clean_html(entry.get("title", "") if isinstance(entry, dict) else getattr(entry, "title", ""))
-                link = entry.get("link", "") if isinstance(entry, dict) else getattr(entry, "link", "")
-                summary = self._clean_html(self._extract_summary_raw(entry)) or title
-                image_url = self._extract_image(entry)
+                title = self._clean_html(entry.get("title", getattr(entry, "title", "")))
+                link = entry.get("link", getattr(entry, "link", ""))
+                summary = self._clean_html(entry.get("summary", getattr(entry, "summary", entry.get("description", getattr(entry, "description", ""))))) or title
+                
+                image_url = None
+                for media in getattr(entry, "media_content", entry.get("media_content", [])) or []:
+                    if isinstance(media, dict) and media.get("url"): image_url = media["url"]; break
 
-                if title and link:
-                    articles.append(ArticleItem(title=title, link=link, summary=summary, source_name=source_name, image_url=image_url))
-        except Exception as e:
-            print(f"❌ [RSSFetcher] フィード処理中にエラー発生 ({source_name}): {e}")
+                if title and link: articles.append(ArticleItem(title, link, summary, source_name, image_url=image_url))
+        except Exception:
+            pass
         return articles
-
 
 class SoccerNewsBot:
     def __init__(self, dry_run: bool = False, max_per_feed: int = 5):
@@ -683,45 +543,34 @@ class SoccerNewsBot:
         self.ai_processor = GroqProcessor()
         self.notifier = DiscordNotifier(dry_run=dry_run)
         self.fetcher = RSSFetcher()
-        self.feeds = self._load_feeds_config()
-
-    def _load_feeds_config(self) -> List[Dict[str, str]]:
+        
         default_feeds = [
             {"name": "BBC Football", "url": "https://feeds.bbci.co.uk/sport/football/rss.xml"},
-            {"name": "Sky Sports Football", "url": "https://www.skysports.com/rss/12040"},
-            {"name": "MARCA (La Liga)", "url": "https://e00-marca.uecdn.es/rss/futbol/primera-division.xml"}
+            {"name": "Sky Sports", "url": "https://www.skysports.com/rss/12040"}
         ]
         if os.path.exists(FEEDS_CONFIG_FILE):
             try:
                 with open(FEEDS_CONFIG_FILE, "r", encoding="utf-8") as f:
                     data = json.load(f)
-                    if isinstance(data, list) and len(data) > 0: return data
-            except Exception:
-                pass
-        return default_feeds
+                    self.feeds = data if isinstance(data, list) and data else default_feeds
+            except: self.feeds = default_feeds
+        else: self.feeds = default_feeds
 
     def run_once(self):
         print(f"\n🚀 [{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] RSSニュース巡回・処理を開始します...")
         try:
-            total_new, total_sent = 0, 0
             for feed_info in self.feeds:
                 name, url = feed_info.get("name", "Unknown"), feed_info.get("url", "")
                 if not url: continue
                 
-                print(f"🔍 巡回中: {name} ({url})")
-                articles = self.fetcher.fetch_feed(name, url, max_articles=self.max_per_feed)
-
-                for article in articles:
+                print(f"🔍 巡回中: {name}")
+                for article in self.fetcher.fetch_feed(name, url, self.max_per_feed):
                     if self.sent_history.is_sent(article.link, article.original_title): continue
                     
                     time.sleep(1.0)
                     analysis = self.ai_processor.process(article)
 
-                    if not analysis or not analysis.title_ja or not is_japanese_text(analysis.title_ja):
-                        if not self.dry_run: self.sent_history.add(article.link, article.original_title)
-                        continue
-
-                    if not analysis.is_football:
+                    if not analysis or not analysis.title_ja or not is_japanese_text(analysis.title_ja) or not analysis.is_football:
                         if not self.dry_run: self.sent_history.add(article.link, article.original_title)
                         continue
 
@@ -730,43 +579,24 @@ class SoccerNewsBot:
                             if not self.dry_run: self.sent_history.add(article.link, article.original_title)
                             continue
 
-                    total_new += 1
-                    if self.notifier.send(article, analysis):
-                        total_sent += 1
-                        if not self.dry_run:
-                            self.sent_history.add(article.link, article.original_title)
-                            if getattr(analysis, "is_lineup", False) and getattr(analysis, "lineup_team", None):
-                                self.lineup_history.add(analysis.lineup_team)
-            
-            print(f"\n✨ 処理完了: 新着記事 {total_new} 件中 {total_sent} 件を配信しました。")
-        except Exception as fatal_err:
-            print(f"💥 ニュース巡回中に致命的エラー: {fatal_err}")
+                    if self.notifier.send(article, analysis) and not self.dry_run:
+                        self.sent_history.add(article.link, article.original_title)
+                        if getattr(analysis, "is_lineup", False) and getattr(analysis, "lineup_team", None):
+                            self.lineup_history.add(analysis.lineup_team)
+        except Exception as e:
+            print(f"💥 エラー: {e}")
             sys.exit(1)
 
     def run_schedule(self):
-        print(f"\n🗓️ [{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] 直近1週間のスケジュールを作成します...")
-        try:
-            schedule_data = self.ai_processor.generate_schedule()
-            if not schedule_data:
-                print("❌ スケジュール生成失敗")
-                return
-            formatted_msg = format_schedule_message(schedule_data)
-            print(formatted_msg[:600] + "...\n")
-            
-            if not self.dry_run:
-                webhook_url = os.getenv("WEBHOOK_SCHEDULE", "").strip()
-                if webhook_url: send_discord_chunks(webhook_url, formatted_msg)
-        except Exception as e:
-            print(f"💥 スケジュール配信エラー: {e}")
+        schedule_data = self.ai_processor.generate_schedule()
+        if schedule_data and not self.dry_run:
+            webhook = os.getenv("WEBHOOK_SCHEDULE", "").strip()
+            if webhook: send_discord_chunks(webhook, format_schedule_message(schedule_data))
 
     def run_loop(self, interval_minutes: int = 15):
-        print(f"🔄 定期実行モード (インターバル: {interval_minutes}分)")
-        try:
-            while True:
-                self.run_once()
-                time.sleep(interval_minutes * 60)
-        except KeyboardInterrupt:
-            print("\n👋 終了しました。")
+        while True:
+            self.run_once()
+            time.sleep(interval_minutes * 60)
 
 def main():
     parser = argparse.ArgumentParser()
