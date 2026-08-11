@@ -159,38 +159,6 @@ class SentHistory:
         except Exception as e:
             print(f"❌ [SentHistory] 保存失敗: {e}")
 
-    def load(self):
-        if os.path.exists(self.filepath):
-            try:
-                with open(self.filepath, "r", encoding="utf-8") as f:
-                    data = json.load(f)
-                    if isinstance(data, list):
-                        self.sent_urls = set(data)
-                        return
-            except Exception as e:
-                print(f"⚠️ [SentHistory] 送信履歴読み込み失敗 ({e})。初期化します。")
-        self.sent_urls = set()
-        self.save()
-
-    def is_sent(self, url: str) -> bool:
-        return url in self.sent_urls
-
-    def add(self, url: str):
-        self.sent_urls.add(url)
-        self.save()
-
-    def save(self):
-        try:
-            urls_list = list(self.sent_urls)
-            if len(urls_list) > self.max_records:
-                urls_list = urls_list[-self.max_records:]
-                self.sent_urls = set(urls_list)
-
-            with open(self.filepath, "w", encoding="utf-8") as f:
-                json.dump(urls_list, f, ensure_ascii=False, indent=2)
-        except Exception as e:
-            print(f"❌ [SentHistory] 保存失敗: {e}")
-
 
 class GroqProcessor:
     """Groq API を使用してニュースの日本語翻訳およびジャンル自動判別を行うモジュール"""
@@ -530,11 +498,9 @@ class DiscordNotifier:
             return False
 
     def send(self, article: ArticleItem, analysis: ArticleAnalysis) -> bool:
-        # 【修正箇所1】まず最初に raw_genre を取得し、小文字にして safe_genre を定義する
         raw_genre = getattr(analysis, "genre", "")
         safe_genre = raw_genre.lower().strip() if isinstance(raw_genre, str) else "general"
 
-        # その上で単数形を複数形に補正する
         if safe_genre == "transfer":
             safe_genre = "transfers"
 
@@ -549,7 +515,6 @@ class DiscordNotifier:
             category_label = f"🚨 スタメン速報 ({analysis.lineup_team})" if getattr(analysis, "lineup_team", None) else "🚨 スタメン速報"
             category_icon = "🚨"
 
-        # 【修正箇所2】ここから下の getattr(analysis, "genre", "") をすべて safe_genre に変更
         elif safe_genre == "transfers":
             label_prefix = self.NEWS_TYPE_MAP.get(getattr(analysis, "news_type", "news"), "【ニュース】")
             full_title = f"{label_prefix} {analysis.title_ja}"
@@ -580,7 +545,6 @@ class DiscordNotifier:
         elif safe_genre in ("laliga", "premier", "bundesliga", "serie_a", "ligue_1"):
             label_prefix = self.NEWS_TYPE_MAP.get(getattr(analysis, "news_type", "news"), "【ニュース】")
             full_title = f"{label_prefix} {analysis.title_ja}"
-            # 【修正箇所3】ここの analysis.genre も safe_genre に変更！
             genre_info = self.GENRE_CONFIG.get(safe_genre, self.GENRE_CONFIG["general"])
             webhook_url = self.webhooks.get(safe_genre) or self.webhooks.get("general")
             color = genre_info["color"]
@@ -748,25 +712,21 @@ class SoccerNewsBot:
                 articles = self.fetcher.fetch_feed(name, url, max_articles=self.max_per_feed)
 
                 for article in articles:
-                    # ✨ 修正1: is_sent に article.original_title を追加
                     if self.sent_history.is_sent(article.link, article.original_title): continue
                     
                     time.sleep(1.0)
                     analysis = self.ai_processor.process(article)
 
                     if not analysis or not analysis.title_ja or not is_japanese_text(analysis.title_ja):
-                        # ✨ 修正2: add に article.original_title を追加
                         if not self.dry_run: self.sent_history.add(article.link, article.original_title)
                         continue
 
                     if not analysis.is_football:
-                        # ✨ 修正3: add に article.original_title を追加
                         if not self.dry_run: self.sent_history.add(article.link, article.original_title)
                         continue
 
                     if getattr(analysis, "is_lineup", False) and getattr(analysis, "lineup_team", None):
                         if self.lineup_history.is_lineup_sent(analysis.lineup_team):
-                            # ✨ 修正4: add に article.original_title を追加
                             if not self.dry_run: self.sent_history.add(article.link, article.original_title)
                             continue
 
@@ -774,7 +734,6 @@ class SoccerNewsBot:
                     if self.notifier.send(article, analysis):
                         total_sent += 1
                         if not self.dry_run:
-                            # ✨ 修正5: add に article.original_title を追加
                             self.sent_history.add(article.link, article.original_title)
                             if getattr(analysis, "is_lineup", False) and getattr(analysis, "lineup_team", None):
                                 self.lineup_history.add(analysis.lineup_team)
