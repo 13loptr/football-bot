@@ -13,12 +13,11 @@ GROQ_API_KEY = os.environ.get("GROQ_API_KEY")
 
 notion = Client(auth=NOTION_TOKEN)
 
-def load_rss_urls():
-    """feeds_config.jsonからRSSのURLリストを読み込む"""
+def load_feeds():
+    """feeds_config.jsonからメディア名とURLのリストを読み込む"""
     try:
         with open('feeds_config.json', 'r', encoding='utf-8') as f:
-            feeds = json.load(f)
-            return [feed['url'] for feed in feeds]
+            return json.load(f)
     except Exception as e:
         print(f"⚠️ JSONファイルの読み込みエラー: {e}")
         return []
@@ -35,16 +34,13 @@ def get_existing_urls():
     return existing_urls
 
 def clean_html(raw_html):
-    """RSSのサマリーに含まれる邪魔なHTMLタグ（<p>や<a>など）を削除してプレーンテキストにする"""
-    if not raw_html:
-        return ""
+    if not raw_html: return ""
     cleanr = re.compile('<.*?>')
     return re.sub(cleanr, '', raw_html).strip()
 
 def translate_text(text, is_body=False):
-    """Groq APIを使ってタイトルまたは本文を翻訳する"""
-    if not GROQ_API_KEY or not text:
-        return text
+    """Groq APIを使ってタイトルまたは本文を翻訳・要約する"""
+    if not GROQ_API_KEY or not text: return text
 
     url = "https://api.groq.com/openai/v1/chat/completions"
     headers = {
@@ -53,31 +49,32 @@ def translate_text(text, is_body=False):
     }
     
     if is_body:
-        # 本文（サマリー）用のプロンプト
+        # 本文（サマリー）用のプロンプト（XのURL文字数制限を回避するため短めに）
         prompt = (
             f"あなたは欧州サッカー専門の翻訳家です。\n"
-            f"以下の海外サッカーニュースの概要(サマリー)を、日本のファンが読みやすい自然な日本語に翻訳してください。\n"
+            f"以下の海外サッカーニュースの概要を、日本のファンが読みやすい自然な日本語に要約してください。\n"
             f"【絶対条件】\n"
+            f"- XのURL制限エラーを防ぐため、最大でも【80文字〜100文字以内】の超短文に要約すること。\n"
             f"- サッカー専門用語は正しく訳すこと。\n"
-            f"- 挨拶や「翻訳しました」などの余計な言葉は一切含めず、翻訳された本文のみを出力すること。\n\n"
+            f"- 挨拶や「翻訳しました」などの余計な言葉は一切含めないこと。\n\n"
             f"対象テキスト: {text}"
         )
     else:
-        # タイトル用のプロンプト（文字数制限重視）
+        # タイトル用のプロンプト
         prompt = (
             f"あなたは欧州サッカー専門の翻訳家です。\n"
             f"次の海外サッカーニュースのタイトルを、キャッチーな装飾や過度な意訳はせず、原文の意味をそのまま正確な日本語に翻訳してください。\n"
-            f"サッカー専門用語（例: クリーンシート→無失点など）は正しく訳してください。\n\n"
+            f"サッカー専門用語は正しく訳すこと。\n\n"
             f"【絶対条件】\n"
-            f"- X（旧Twitter）でURLと一緒に投稿しても文字数制限に引っかからない長さ（最大でも80文字程度）に収めること。\n"
-            f"- 解説や挨拶、前置き、「翻訳結果：」などの余計な文字は一切出力せず、日本語のタイトル【本文のみ】を出力すること。\n\n"
+            f"- 最大でも80文字程度に収めること。\n"
+            f"- 解説や挨拶などの余計な文字は一切出力せず、日本語のタイトル【本文のみ】を出力すること。\n\n"
             f"対象タイトル: {text}"
         )
 
     data = {
         "model": "llama3-8b-8192",
         "messages": [{"role": "user", "content": prompt}],
-        "temperature": 0.3
+        "temperature": 0.2
     }
 
     try:
@@ -85,8 +82,6 @@ def translate_text(text, is_body=False):
         response.raise_for_status()
         result = response.json()
         translated = result["choices"][0]["message"]["content"].strip()
-        
-        # タイトルの場合は不要な記号を削除
         if not is_body:
             return translated.replace('"', '').replace('「', '').replace('」', '')
         return translated
@@ -94,82 +89,55 @@ def translate_text(text, is_body=False):
         print(f"⚠️ Groq翻訳エラー: {e}")
         return text
 
-def add_to_notion(title, url, pub_date, body_text):
-    """Notionデータベースに新規レコードとページ内コンテンツを追加"""
-    # Notionの1ブロックあたりの文字数上限エラーを防ぐための安全策（2000文字でカット）
-    safe_body_text = body_text[:1999] if body_text else "（本文の要約が提供されていません）"
-
+def add_to_notion(title, url, pub_date, summary, source_name):
+    """Notionデータベースに新規レコード（タイトル、URL、要約、ソース）を追加"""
     notion.pages.create(
         parent={"database_id": DATABASE_ID},
         properties={
-            "Title": {
-                "title": [{"text": {"content": title}}]
-            },
-            "URL": {
-                "url": url
-            },
-            "Date": {
-                "date": {"start": pub_date}
-            },
-            "Status": {
-                "status": {"name": "未投稿"}
-            }
-        },
-        # ページを開いたときの中身（コンテンツ）に翻訳された本文を追加
-        children=[
-            {
-                "object": "block",
-                "type": "paragraph",
-                "paragraph": {
-                    "rich_text": [
-                        {
-                            "type": "text",
-                            "text": {"content": safe_body_text}
-                        }
-                    ]
-                }
-            }
-        ]
+            "Title": {"title": [{"text": {"content": title}}]},
+            "URL": {"url": url},
+            "Date": {"date": {"start": pub_date}},
+            "Status": {"status": {"name": "未投稿"}},
+            "Summary": {"rich_text": [{"text": {"content": summary}}]}, # 追加した列
+            "Source": {"rich_text": [{"text": {"content": source_name}}]} # 追加した列
+        }
     )
 
 def main():
     print("🚀 処理を開始します...")
     
-    rss_urls = load_rss_urls()
-    if not rss_urls:
+    feeds = load_feeds()
+    if not feeds:
         print("🛑 読み込むRSS URLがありませんでした。処理を終了します。")
         return
 
     existing_urls = get_existing_urls()
     print(f"📊 Notion側の既存データ: {len(existing_urls)}件")
     
-    for rss_url in rss_urls:
-        print(f"\n📡 フィード取得中: {rss_url}")
+    for feed_info in feeds:
+        source_name = feed_info.get("name", "Unknown")
+        rss_url = feed_info.get("url", "")
+        
+        print(f"\n📡 フィード取得中: [{source_name}] {rss_url}")
         feed = feedparser.parse(rss_url)
         print(f"✅ 取得できた記事数: {len(feed.entries)}件")
         
-        for entry in feed.entries[:5]:  # 各フィードから最新5件を取得
+        for entry in feed.entries[:5]:
             title = entry.title
             link = entry.link
             
             if link not in existing_urls:
                 pub_date = datetime.now().isoformat()
                 
-                # RSSから本文（サマリー）を取得し、HTMLタグを綺麗に取り除く
                 raw_summary = getattr(entry, 'summary', getattr(entry, 'description', ''))
                 clean_summary = clean_html(raw_summary)
                 
-                # 翻訳の実行（タイトルと本文を別々に翻訳）
-                print(f"🤖 タイトル翻訳中...")
+                print(f"🤖 翻訳・要約中: {title[:30]}...")
                 japanese_title = translate_text(title, is_body=False)
+                japanese_body = translate_text(clean_summary[:800], is_body=True) if clean_summary else ""
                 
-                japanese_body = ""
-                if clean_summary:
-                    print(f"🤖 本文(サマリー)翻訳中...")
-                    # 長すぎる場合はAPIの負荷を下げるために最初の800文字程度に制限
-                    japanese_body = translate_text(clean_summary[:800], is_body=True)
-                
-                add_to_notion(japanese_title, link, pub_date, japanese_body)
+                # 新しい列（Summary, Source）を含めてNotionへ送信
+                add_to_notion(japanese_title, link, pub_date, japanese_body, source_name)
                 print(f"🟢 追加しました: {japanese_title}")
             else:
                 print(f"⚪ スキップ（保存済み）: {title[:30]}...")
