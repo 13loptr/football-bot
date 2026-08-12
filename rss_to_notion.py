@@ -23,7 +23,8 @@ def load_rss_urls():
 
 def get_existing_urls():
     """すでにNotionに保存済みのURLを取得して重複を防ぐ"""
-    results = notion.databases.search(database_id=DATABASE_ID)
+    # 最新のNotion API仕様（2026年版）に合わせて .search() を使用
+    results = notion.search(filter={"property": "object", "value": "page"})
     existing_urls = set()
     for page in results.get("results", []):
         props = page.get("properties", {})
