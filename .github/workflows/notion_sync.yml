@@ -1,0 +1,33 @@
+name: RSS to Notion Stockerer
+
+on:
+  schedule:
+    # 1時間おきに実行 (UTCの毎時0分)
+    - cron: '0 * * * *'
+  workflow_dispatch: # 必要ならGitHub画面からいつでも手動で実行できるボタン
+
+jobs:
+  notion-stock:
+    name: Sync RSS to Notion Database
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11' # 既存のBot環境に合わせて3.11で統一します
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Run RSS to Notion script
+        env:
+          NOTION_API_KEY: ${{ secrets.NOTION_API_KEY }}
+          NOTION_DATABASE_ID: ${{ secrets.NOTION_DATABASE_ID }}
+        run: |
+          python3 rss_to_notion.py
