@@ -9,6 +9,11 @@ BUFFER_FILE = os.path.join(os.path.dirname(__file__), '..', 'data', 'buffer_thre
 HISTORY_FILE = os.path.join(os.path.dirname(__file__), '..', 'data', 'history_threads_regal.json')
 
 def load_json_list(filepath):
+    # フォルダが存在しない場合は自動で作成する
+    dirname = os.path.dirname(filepath)
+    if not os.path.exists(dirname):
+        os.makedirs(dirname, exist_ok=True)
+
     if os.path.exists(filepath):
         try:
             with open(filepath, 'r', encoding='utf-8') as f:
@@ -17,6 +22,11 @@ def load_json_list(filepath):
     return []
 
 def save_json_list(filepath, data):
+    # 保存時にも念のためフォルダの存在チェックを入れる
+    dirname = os.path.dirname(filepath)
+    if not os.path.exists(dirname):
+        os.makedirs(dirname, exist_ok=True)
+
     with open(filepath, 'w', encoding='utf-8') as f:
         json.dump(data, f, ensure_ascii=False, indent=2)
 

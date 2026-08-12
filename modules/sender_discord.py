@@ -1,7 +1,8 @@
 import os
 import json
 import requests
-from .core_brain import ArticleItem, ArticleAnalysis
+# 💡 修正1: app.pyから直接呼ばれるため、相対インポート「.」を外して「modules.」から指定します
+from modules.core_brain import ArticleItem, ArticleAnalysis
 
 HISTORY_FILE = os.path.join(os.path.dirname(__file__), '..', 'data', 'history_discord.json')
 
@@ -14,8 +15,11 @@ def load_history():
     return set()
 
 def save_history(history_set):
+    # 💡 修正2: Threadsと同様、保存する前にdataフォルダが無ければ自動作成する処理を追加します
+    os.makedirs(os.path.dirname(HISTORY_FILE), exist_ok=True)
+    
     with open(HISTORY_FILE, 'w', encoding='utf-8') as f:
-        json.dump(list(history_set)[-3000:], f, ensure_ascii=False)
+        json.dump(list(history_set)[-3000:], f, ensure_ascii=False, indent=2) # 綺麗に見えるようindentも追加
 
 def send_to_discord(article: ArticleItem, analysis: ArticleAnalysis):
     history = load_history()
