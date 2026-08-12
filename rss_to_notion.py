@@ -23,7 +23,7 @@ def load_rss_urls():
 
 def get_existing_urls():
     """すでにNotionに保存済みのURLを取得して重複を防ぐ"""
-    results = notion.databases.query(database_id=DATABASE_ID)
+    results = notion.databases.serch(database_id=DATABASE_ID)
     existing_urls = set()
     for page in results.get("results", []):
         props = page.get("properties", {})
