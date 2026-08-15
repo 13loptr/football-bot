@@ -54,4 +54,4 @@ def cron_job():
 if __name__ == '__main__':
     # Renderの環境変数(PORT)に合わせて起動
     port = int(os.environ.get("PORT", 10000))
-    app.run(host='0.0.
+    app.run(host='0.0.0.0', port=port)

@@ -92,4 +92,13 @@ def process_threads_buffer(max_posts=3):
                     buffer.insert(0, item) 
                     break
             else:
-                print(f"�
+                print(f"❌ Threadsコンテナ作成エラー: {res1.text}")
+                buffer.insert(0, item)
+                break
+        except Exception as e:
+            print(f"Threads投稿エラー: {e}")
+            buffer.insert(0, item)
+            break
+
+    save_json_list(BUFFER_FILE, buffer)
+    save_json_list(HISTORY_FILE, list(history)[-3000:])
