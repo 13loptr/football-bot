@@ -78,8 +78,13 @@ def process_threads_buffer(max_posts=3):
                     posted_count += 1
                     print(f"✅ Threads投稿成功: {item['title'][:20]}...")
                 else:
+                    print(f"❌ Threads公開エラー: {res2.text}")
                     buffer.insert(0, item) # 失敗時はバッファに戻す
                     break
+            else:
+                print(f"❌ Threadsコンテナ作成エラー: {res1.text}")
+                buffer.insert(0, item)
+                break
         except Exception as e:
             print(f"Threads投稿エラー: {e}")
             buffer.insert(0, item)
