@@ -56,12 +56,12 @@ def fetch_rss_feeds(feeds_config: List[dict], max_articles=5) -> List[ArticleIte
 def process_with_groq(article: ArticleItem) -> ArticleAnalysis:
     """Groq APIで翻訳と厳密なジャンル分けを行う"""
     if not GROQ_API_KEY:
-        return ArticleAnalysis(is_football=True, title_ja=article.title, summary_ja=article.summary, genre="general")
+        # 💡 ここもFalseに変更（APIキーがない場合に英語で誤爆するのを防ぐ）
+        return ArticleAnalysis(is_football=False, title_ja=article.title, summary_ja=article.summary, genre="general")
 
     url = "https://api.groq.com/openai/v1/chat/completions"
     headers = {"Authorization": f"Bearer {GROQ_API_KEY}", "Content-Type": "application/json"}
     
-    # 💡 復活ポイント2: 以前の「超・厳格なプロンプト」を最新のJSON強制モードに最適化して完全移植
     system_prompt = (
         "あなたは海外サッカーに詳しいプロのスポーツジャーナリスト兼翻訳家です。\n"
         "【絶対命令】title_ja と summary_ja は絶対に100%日本語に翻訳・要約してください。英語のままは厳禁です。\n\n"
@@ -91,10 +91,11 @@ def process_with_groq(article: ArticleItem) -> ArticleAnalysis:
             {"role": "user", "content": user_prompt}
         ],
         "response_format": {"type": "json_object"},
-        "temperature": 0.1  # 💡 揺らぎをなくし、厳密なルールを100%守らせる設定
+        "temperature": 0.1
     }
     
-    for attempt in range(2):
+    # 💡 修正1: リトライ回数を3回に増やす
+    for attempt in range(3):
         try:
             res = requests.post(url, headers=headers, json=payload, timeout=20)
             if res.status_code == 200:
@@ -111,7 +112,9 @@ def process_with_groq(article: ArticleItem) -> ArticleAnalysis:
                     lineup_team=data.get("lineup_team", None)
                 )
         except Exception as e:
-            print(f"🔄 Groq APIエラー (試行 {attempt+1}/2): {e}")
-            time.sleep(2)
+            print(f"🔄 Groq APIエラー (試行 {attempt+1}/3): {e}")
+            # 💡 修正2: 待機時間を5秒に延長し、APIの混雑をやり過ごす
+            time.sleep(5)
             
-    return ArticleAnalysis(is_football=True, title_ja=article.title, summary_ja=article.summary[:100], genre="general")
+    # 💡 修正3: 全て失敗した場合は is_football=False にして安全に破棄（英語での誤爆を防ぐ）
+    return ArticleAnalysis(is_football=False, title_ja=article.title, summary_ja=article.summary[:100], genre="general")

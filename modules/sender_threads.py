@@ -10,10 +10,10 @@ HISTORY_FILE = os.path.join(os.path.dirname(__file__), '..', 'data', 'history_th
 # 💡 ジャンルに応じたハッシュタグの辞書を追加
 GENRE_HASHTAGS = {
     "transfers": "🔁",
-    "japanese": "#🇯🇵",
+    "japanese": "🇯🇵",
     "national": "🌏",
     "laliga": "🇪🇸",
-    "premier": "#🏴󠁧󠁢󠁥󠁮󠁧󠁿",
+    "premier": "🏴󠁧󠁢󠁥󠁮󠁧󠁿",
     "bundesliga": "🇩🇪",
     "serie_a": "🇮🇹",
     "ligue_1": "🇫🇷",
@@ -71,7 +71,7 @@ def process_threads_buffer(max_posts=3):
         hashtag = GENRE_HASHTAGS.get(genre_key, "#海外サッカー")
         
         # 💡 タイトルの上にハッシュタグを配置
-        text = f"⚽{hashtag}\n{item['title']}\n\n{item['summary']}\n\nソース: {item['source']}"
+        text = f"{hashtag}\n{item['title']}\n\n{item['summary']}\n\nソース: {item['source']}"
         text = text.replace("【", "").replace("】", "")[:495]
 
         if posted_count > 0:
@@ -92,13 +92,4 @@ def process_threads_buffer(max_posts=3):
                     buffer.insert(0, item) 
                     break
             else:
-                print(f"❌ Threadsコンテナ作成エラー: {res1.text}")
-                buffer.insert(0, item)
-                break
-        except Exception as e:
-            print(f"Threads投稿エラー: {e}")
-            buffer.insert(0, item)
-            break
-
-    save_json_list(BUFFER_FILE, buffer)
-    save_json_list(HISTORY_FILE, list(history)[-3000:])
+                print(f"�
