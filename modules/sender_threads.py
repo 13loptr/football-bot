@@ -7,17 +7,16 @@ import requests
 BUFFER_FILE = os.path.join(os.path.dirname(__file__), '..', 'data', 'buffer_threads_regal.json')
 HISTORY_FILE = os.path.join(os.path.dirname(__file__), '..', 'data', 'history_threads_regal.json')
 
-# 💡 ジャンルに応じたハッシュタグの辞書を追加
 GENRE_HASHTAGS = {
-    "transfers": "🔁",
-    "japanese": "🇯🇵",
-    "national": "🌏",
-    "laliga": "🇪🇸",
-    "premier": "🏴󠁧󠁢󠁥󠁮󠁧󠁿",
-    "bundesliga": "🇩🇪",
-    "serie_a": "🇮🇹",
-    "ligue_1": "🇫🇷",
-    "general": "⚽️"
+    "transfers": "#移籍情報 #サッカー移籍",
+    "japanese": "#日本人選手 #サッカー日本代表",
+    "national": "#サッカー各国代表",
+    "laliga": "#ラ・リーガ #レアルマドリード",
+    "premier": "#プレミアリーグ",
+    "bundesliga": "#ブンデスリーガ",
+    "serie_a": "#セリエA",
+    "ligue_1": "#リーグアン",
+    "general": "#海外サッカー #サッカーニュース"
 }
 
 def load_json_list(filepath):
@@ -38,9 +37,9 @@ def save_json_list(filepath, data):
     with open(filepath, 'w', encoding='utf-8') as f:
         json.dump(data, f, ensure_ascii=False, indent=2)
 
-# 💡 genreを受け取れるように引数を追加
 def add_to_buffer(title_ja, summary_ja, source_name, genre):
-    history = set(load_json_list(HISTORY_FILE))
+    # 💡 setを使わずlistのまま読み込むことで順番を維持
+    history = load_json_list(HISTORY_FILE)
     if title_ja in history:
         return 
 
@@ -50,7 +49,7 @@ def add_to_buffer(title_ja, summary_ja, source_name, genre):
             "title": title_ja,
             "summary": summary_ja,
             "source": source_name,
-            "genre": genre # 💡 バッファにジャンルを保存
+            "genre": genre
         })
         save_json_list(BUFFER_FILE, buffer)
 
@@ -60,17 +59,16 @@ def process_threads_buffer(max_posts=3):
     if not user_id or not access_token: return
 
     buffer = load_json_list(BUFFER_FILE)
-    history = set(load_json_list(HISTORY_FILE))
+    # 💡 setを使わずlistのまま読み込む
+    history = load_json_list(HISTORY_FILE)
     
     posted_count = 0
     while buffer and posted_count < max_posts:
         item = buffer.pop(0)
         
-        # 💡 バッファからジャンルを取り出し、ハッシュタグに変換
         genre_key = item.get('genre', 'general')
         hashtag = GENRE_HASHTAGS.get(genre_key, "#海外サッカー")
         
-        # 💡 タイトルの上にハッシュタグを配置
         text = f"{hashtag}\n{item['title']}\n\n{item['summary']}\n\nソース: {item['source']}"
         text = text.replace("【", "").replace("】", "")[:495]
 
@@ -84,7 +82,9 @@ def process_threads_buffer(max_posts=3):
                 creation_id = res1.json().get("id")
                 res2 = requests.post(f"{api_url}/threads_publish", data={"creation_id": creation_id, "access_token": access_token}, timeout=15)
                 if res2.status_code == 200:
-                    history.add(item['title'])
+                    # 💡 リストにそのまま追加
+                    if item['title'] not in history:
+                        history.append(item['title'])
                     posted_count += 1
                     print(f"✅ Threads投稿成功: {item['title'][:20]}...")
                 else:
@@ -101,4 +101,5 @@ def process_threads_buffer(max_posts=3):
             break
 
     save_json_list(BUFFER_FILE, buffer)
-    save_json_list(HISTORY_FILE, list(history)[-3000:])
+    # 💡 リストの後ろから3000件を保存（これで順番が絶対に崩れない！）
+    save_json_list(HISTORY_FILE, history[-3000:])
