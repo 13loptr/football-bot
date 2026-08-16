@@ -85,7 +85,7 @@ def process_with_groq(article: ArticleItem) -> ArticleAnalysis:
     user_prompt = f"配信元メディア: {article.source_name}\nタイトル: {article.title}\n概要: {article.summary}"
     
     payload = {
-        "model": "llama-3.3-70b-versatile",
+        "model": "llama-3.1-8b-instant",
         "messages": [
             {"role": "system", "content": system_prompt},
             {"role": "user", "content": user_prompt}

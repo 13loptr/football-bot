@@ -31,7 +31,7 @@ def run_news_cycle():
             send_to_discord(article, analysis)
             
             # Threadsのバッファへ追加（内部で重複チェック）
-            add_to_buffer(analysis.title_ja, analysis.summary_ja, article.source_name, analysis.genre)
+            add_to_buffer(analysis.title_ja, analysis.summary_ja, article.source_name, analysis.genre, article.link)
 
     # 4. Threadsのバッファから最大3件を安全に投稿
     print("📦 Threadsバッファの消化を開始します...")
@@ -54,4 +54,4 @@ def cron_job():
 if __name__ == '__main__':
     # Renderの環境変数(PORT)に合わせて起動
     port = int(os.environ.get("PORT", 10000))
-    app.run(host='0.0.0.0', port=port)
+    app.
