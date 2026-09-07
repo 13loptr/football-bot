@@ -88,4 +88,23 @@ def process_threads_buffer(max_posts=3):
                     
                     # 💡 修正: 日本語タイトルではなくURLを優先して保存する
                     saved_key = item.get('url', item['title'])
-                    if saved_key n
+                    if saved_key not in history:
+                        history.append(saved_key)
+                        
+                    posted_count += 1
+                    print(f"✅ Threads投稿成功: {item['title'][:20]}...")
+                else:
+                    print(f"❌ Threads公開エラー: {res2.text}")
+                    buffer.insert(0, item) 
+                    break
+            else:
+                print(f"❌ Threadsコンテナ作成エラー: {res1.text}")
+                buffer.insert(0, item)
+                break
+        except Exception as e:
+            print(f"Threads投稿エラー: {e}")
+            buffer.insert(0, item)
+            break
+
+    save_json_list(BUFFER_FILE, buffer)
+    save_json_list(HISTORY_FILE, history[-3000:])

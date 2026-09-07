@@ -16,22 +16,29 @@ def run_news_cycle():
     try:
         with open('feeds_config.json', 'r', encoding='utf-8') as f:
             feeds = json.load(f)
-    except Exception:
+            print(f"✅ feeds_config.json を読み込みました。対象サイト数: {len(feeds)}")
+    except Exception as e:
+        print(f"❌ feeds_config.json の読み込みに失敗しました: {e}")
         feeds = []
 
     # 2. RSS取得
     articles = fetch_rss_feeds(feeds, max_articles=5)
+    print(f"📰 取得した記事の総数: {len(articles)} 件")
     
     # 3. 各記事をAI処理して分配
     for article in articles:
+        print(f"🧠 AI処理開始: {article.title}")
         analysis = process_with_groq(article)
         
         if analysis.is_football:
+            print(f"✅ サッカー記事判定・送信準備: {analysis.title_ja}")
             # Discordへ送信（内部で重複チェック）
             send_to_discord(article, analysis)
             
             # Threadsのバッファへ追加（内部で重複チェック）
             add_to_buffer(analysis.title_ja, analysis.summary_ja, article.source_name, analysis.genre, article.link)
+        else:
+            print(f"⏭️ スキップ (非サッカー判定 or APIキー未設定): {article.title}")
 
     # 4. Threadsのバッファから最大3件を安全に投稿
     print("📦 Threadsバッファの消化を開始します...")
@@ -45,13 +52,10 @@ def home():
 @app.route('/cron')
 def cron_job():
     """UptimeRobotから定期的にアクセスされるエンドポイント"""
-    # 処理に時間がかかってUptimeRobotがタイムアウトエラーを出さないよう、
-    # 実際の処理は別スレッド（裏側）で走らせ、即座に「OK」を返します。
     thread = threading.Thread(target=run_news_cycle)
     thread.start()
     return jsonify({"status": "processing started in background", "code": 200})
 
 if __name__ == '__main__':
-    # Renderの環境変数(PORT)に合わせて起動
     port = int(os.environ.get("PORT", 10000))
-    app.
+    app.run(host='0.0.0.0', port=port)
