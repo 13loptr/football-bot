@@ -94,8 +94,8 @@ def process_with_groq(article: ArticleItem) -> ArticleAnalysis:
         "temperature": 0.1
     }
     
-    # 💡 修正1: リトライ回数を3回に増やす
-    for attempt in range(3):
+    # 💡 修正: リトライ回数を5回に増やし、制限(429)が出たら長めに休む
+    for attempt in range(5):
         try:
             res = requests.post(url, headers=headers, json=payload, timeout=20)
             if res.status_code == 200:
@@ -111,13 +111,16 @@ def process_with_groq(article: ArticleItem) -> ArticleAnalysis:
                     is_lineup=data.get("is_lineup", False),
                     lineup_team=data.get("lineup_team", None)
                 )
+            elif res.status_code == 429:
+                # 💡 ここを追加：429（ペース違反）の場合は20秒待機して枠の回復を待つ
+                print(f"⏳ ペース制限(429)に到達。20秒休憩します... (試行 {attempt+1}/5)")
+                time.sleep(20)
             else:
-                # 💡 ここを追加：Groqからの拒否理由（エラー詳細）をログに出力する
                 print(f"❌ Groq API 拒否エラー ({res.status_code}): {res.text}")
-                time.sleep(5)    
+                time.sleep(5)
+                
         except Exception as e:
-            print(f"🔄 Groq APIエラー (試行 {attempt+1}/3): {e}")
-            # 💡 修正2: 待機時間を5秒に延長し、APIの混雑をやり過ごす
+            print(f"🔄 Groq API通信エラー (試行 {attempt+1}/5): {e}")
             time.sleep(5)
             
     # 💡 修正3: 全て失敗した場合は is_football=False にして安全に破棄（英語での誤爆を防ぐ）
