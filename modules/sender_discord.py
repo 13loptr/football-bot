@@ -20,7 +20,7 @@ GENRE_CONFIG = {
 NEWS_TYPE_MAP = {
     "official": "【公式/確定】",
     "rumor": "【噂/ゴシップ】",
-    "news": "【ニュース】"
+    "news": ""
 }
 
 def load_history():
@@ -57,7 +57,7 @@ def send_to_discord(article: ArticleItem, analysis: ArticleAnalysis):
         return False
 
     is_lineup = getattr(analysis, "is_lineup", False)
-    news_type_str = NEWS_TYPE_MAP.get(getattr(analysis, "news_type", "news"), "【ニュース】")
+    news_type_str = NEWS_TYPE_MAP.get(getattr(analysis, "news_type", "news"), "")
 
     if is_lineup:
         full_title = f"【🚨 スタメン速報】 {analysis.title_ja}"
