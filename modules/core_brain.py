@@ -111,6 +111,10 @@ def process_with_groq(article: ArticleItem) -> ArticleAnalysis:
                     is_lineup=data.get("is_lineup", False),
                     lineup_team=data.get("lineup_team", None)
                 )
+            else:
+                # 💡 ここを追加：Groqからの拒否理由（エラー詳細）をログに出力する
+                print(f"❌ Groq API 拒否エラー ({res.status_code}): {res.text}")
+                time.sleep(5)    
         except Exception as e:
             print(f"🔄 Groq APIエラー (試行 {attempt+1}/3): {e}")
             # 💡 修正2: 待機時間を5秒に延長し、APIの混雑をやり過ごす
