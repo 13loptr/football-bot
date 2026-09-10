@@ -72,7 +72,7 @@ def process_threads_buffer(max_posts=3):
         genre_key = item.get('genre', 'general')
         hashtag = GENRE_HASHTAGS.get(genre_key, "#海外サッカー")
         
-        text = f"{hashtag}\n{item['title']}\n\n{item['summary']}\n\nソース: {item['source']}"
+        text = f"{item['title']}\n\n{item['summary']}\n\nソース: {item['source']}"
         text = text.replace("【", "").replace("】", "")[:495]
 
         if posted_count > 0:
